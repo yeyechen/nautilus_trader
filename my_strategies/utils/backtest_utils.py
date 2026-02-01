@@ -1,0 +1,187 @@
+from decimal import Decimal
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from nautilus_trader.model.currencies import USDT
+from nautilus_trader.model.data import Bar
+from nautilus_trader.model.data import BarType
+from nautilus_trader.model.identifiers import InstrumentId
+from nautilus_trader.model.identifiers import Symbol
+from nautilus_trader.model.identifiers import Venue
+from nautilus_trader.model.instruments import CryptoPerpetual
+from nautilus_trader.model.objects import Currency
+from nautilus_trader.model.objects import Money
+from nautilus_trader.model.objects import Price
+from nautilus_trader.model.objects import Quantity
+from nautilus_trader.persistence.wranglers import BarDataWrangler
+
+
+BINANCE = Venue("BINANCE")
+HYPERLIQUID = Venue("HYPERLIQUID")
+DATA_DIR = Path(__file__).parent.parent / "data"
+
+
+def get_available_symbols(
+    signals_path: Path,
+    data_dir: Path | None = None,
+    venue: str = "binance",
+) -> list[str]:
+    if data_dir is None:
+        data_dir = DATA_DIR
+
+    signals_df = pd.read_parquet(signals_path)
+    signal_symbols = set(signals_df["symbol"].unique())
+
+    available = set()
+    if venue == "binance":
+        for f in (data_dir / "binance").glob("*.parquet"):
+            parts = f.stem.split("_")
+            if len(parts) >= 2 and parts[1].endswith("USDT"):
+                available.add(parts[1][:-4])
+    elif venue == "hyperliquid":
+        for f in (data_dir / "hyperliquid").glob("*.parquet"):
+            parts = f.stem.split("_")
+            if len(parts) >= 2:
+                available.add(parts[1])
+
+    return sorted(signal_symbols & available)
+
+
+def create_instrument(
+    base_symbol: str,
+    venue: Venue | None = None,
+) -> CryptoPerpetual:
+    if venue is None:
+        venue = BINANCE
+
+    base_currency = Currency.from_str(base_symbol)
+    return CryptoPerpetual(
+        instrument_id=InstrumentId(Symbol(f"{base_symbol}USDT-PERP"), venue),
+        raw_symbol=Symbol(f"{base_symbol}USDT"),
+        base_currency=base_currency,
+        quote_currency=USDT,
+        settlement_currency=USDT,
+        is_inverse=False,
+        price_precision=2,
+        price_increment=Price.from_str("0.01"),
+        size_precision=8,
+        size_increment=Quantity.from_str("0.00000001"),
+        max_quantity=None,
+        min_quantity=None,
+        max_notional=None,
+        min_notional=Money(10.00, USDT),
+        max_price=Price.from_str("1000000.00"),
+        min_price=Price.from_str("0.01"),
+        margin_init=Decimal("0.05"),
+        margin_maint=Decimal("0.025"),
+        maker_fee=Decimal("0.0002"),
+        taker_fee=Decimal("0.0004"),
+        ts_event=0,
+        ts_init=0,
+    )
+
+
+def load_bars(
+    instrument: CryptoPerpetual,
+    bar_type: BarType,
+    data_dir: Path | None = None,
+    venue: str = "binance",
+) -> list[Bar]:
+    if data_dir is None:
+        data_dir = DATA_DIR
+
+    if venue == "binance":
+        return _load_binance_bars(instrument, bar_type, data_dir)
+    elif venue == "hyperliquid":
+        return _load_hyperliquid_bars(instrument, bar_type, data_dir)
+    else:
+        raise ValueError(f"Unsupported venue: {venue}")
+
+
+def _load_binance_bars(
+    instrument: CryptoPerpetual,
+    bar_type: BarType,
+    data_dir: Path,
+) -> list[Bar]:
+    symbol = str(instrument.raw_symbol)
+    pattern = f"binance_{symbol}_1h_daily_*.parquet"
+    files = list((data_dir / "binance").glob(pattern))
+    if not files:
+        raise FileNotFoundError(f"No data file found for {symbol}")
+
+    df = pd.read_parquet(files[0])
+    df = df[["timestamp", "open", "high", "low", "close", "volume"]]
+    df[["open", "high", "low", "close", "volume"]] = df[
+        ["open", "high", "low", "close", "volume"]
+    ].astype(np.float64)
+    df = df.set_index("timestamp")
+
+    wrangler = BarDataWrangler(bar_type, instrument)
+    return wrangler.process(df)
+
+
+def _load_hyperliquid_bars(
+    instrument: CryptoPerpetual,
+    bar_type: BarType,
+    data_dir: Path,
+) -> list[Bar]:
+    # Extract base symbol (e.g., "BTC" from "BTCUSDT")
+    raw_symbol = str(instrument.raw_symbol)
+    base_symbol = raw_symbol.replace("USDT", "")
+
+    pattern = f"hyperliquid_{base_symbol}_hourly_*.parquet"
+    files = list((data_dir / "hyperliquid").glob(pattern))
+    if not files:
+        raise FileNotFoundError(f"No data file found for {base_symbol}")
+
+    df = pd.read_parquet(files[0])
+
+    # Hyperliquid has mid_px instead of OHLC, construct bars from it
+    # For hourly snapshots, open=high=low=close=mid_px
+    df = df.rename(columns={"time": "timestamp"})
+    df["open"] = df["mid_px"].astype(np.float64)
+    df["high"] = df["mid_px"].astype(np.float64)
+    df["low"] = df["mid_px"].astype(np.float64)
+    df["close"] = df["mid_px"].astype(np.float64)
+    # Use day_ntl_vlm as volume proxy (notional volume)
+    df["volume"] = df["day_ntl_vlm"].astype(np.float64)
+
+    df = df[["timestamp", "open", "high", "low", "close", "volume"]]
+    df = df.set_index("timestamp")
+
+    wrangler = BarDataWrangler(bar_type, instrument)
+    return wrangler.process(df)
+
+
+def configure_crypto_statistics(engine, period: int = 365):
+    """
+    Configure analyzer statistics for crypto trading (365-day annualization).
+
+    Replaces the default 252-day (stock market) annualization with 365-day
+    annualization appropriate for 24/7 crypto markets.
+
+    Parameters
+    ----------
+    engine : BacktestEngine
+        The backtest engine instance.
+    period : int, default 365
+        The annualization period in days.
+
+    """
+    from nautilus_trader.analysis import ReturnsVolatility
+    from nautilus_trader.analysis import SharpeRatio
+    from nautilus_trader.analysis import SortinoRatio
+
+    analyzer = engine.portfolio.analyzer
+
+    # Deregister 252-day defaults
+    analyzer.deregister_statistic(SharpeRatio())
+    analyzer.deregister_statistic(SortinoRatio())
+    analyzer.deregister_statistic(ReturnsVolatility())
+
+    # Register with crypto-appropriate period
+    analyzer.register_statistic(SharpeRatio(period))
+    analyzer.register_statistic(SortinoRatio(period))
+    analyzer.register_statistic(ReturnsVolatility(period))
