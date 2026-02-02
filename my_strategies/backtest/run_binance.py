@@ -11,6 +11,8 @@ from my_strategies.utils import create_instrument
 from my_strategies.utils import get_available_symbols
 from my_strategies.utils import load_bars
 from nautilus_trader.analysis import create_tearsheet
+from nautilus_trader.analysis.config import GridLayout
+from nautilus_trader.analysis.config import TearsheetConfig
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.config import BacktestEngineConfig
 from nautilus_trader.config import LoggingConfig
@@ -38,11 +40,10 @@ if __name__ == "__main__":
     engine_config = BacktestEngineConfig(
         trader_id=TraderId("BACKTEST-001"),
         logging=LoggingConfig(
-            log_level="INFO",
-            log_level_file="DEBUG",
+            log_level="ERROR",
+            log_level_file="INFO",
             log_directory=str(LOG_DIR),
             log_file_name=f"backtest_binance_{timestamp}",
-            log_colors=True,
         ),
     )
     engine = BacktestEngine(config=engine_config)
@@ -57,7 +58,7 @@ if __name__ == "__main__":
         default_leverage=Decimal(1),
     )
 
-    symbols = get_available_symbols(SIGNALS_PATH, DATA_DIR)
+    symbols = get_available_symbols(SIGNALS_PATH, DATA_DIR, venue="binance")
     print(f"Found {len(symbols)} symbols with matching data")
 
     instruments = {}
@@ -73,7 +74,7 @@ if __name__ == "__main__":
         bar_type = BarType.from_str(f"{instrument.id}-1-HOUR-LAST-EXTERNAL")
         bar_types[symbol] = bar_type
 
-        bars = load_bars(instrument, bar_type, DATA_DIR)
+        bars = load_bars(instrument, bar_type, DATA_DIR, venue="binance")
         all_bars.extend(bars)
         print(f"  Loaded {len(bars)} bars")
 
@@ -100,9 +101,37 @@ if __name__ == "__main__":
     print(engine.trader.generate_order_fills_report())
     print(engine.trader.generate_positions_report())
     print(f"\nLogs written to: {LOG_DIR}/backtest_binance_{timestamp}.log")
+    # Generate positions CSV for detailed analysis
+    print("\n" + "=" * 60)
+    print("GENERATING DETAILED REPORTS")
+    print("=" * 60)
 
+    # Generate daily position snapshots CSV
+    daily_snapshots_df = strategy.get_daily_snapshots_df()
+    daily_snapshots_path = LOG_DIR / f"daily_positions_{timestamp}.csv"
+    daily_snapshots_df.to_csv(daily_snapshots_path, index=False)
+    print(f"Daily positions CSV: {daily_snapshots_path}")
+    print(f"Total daily snapshots: {len(strategy.daily_snapshots)}")
+
+    tearsheet_config = TearsheetConfig(
+        theme="plotly_dark",
+        height=1800,
+        show_logo=False,
+        layout=GridLayout(
+            rows=4,
+            cols=2,
+            heights=[0.40, 0.25, 0.20, 0.15],
+            vertical_spacing=0.08,
+            horizontal_spacing=0.08,
+        ),
+    )
     tearsheet_path = LOG_DIR / f"tearsheet_binance_{timestamp}.html"
-    create_tearsheet(engine, output_path=str(tearsheet_path))
+    create_tearsheet(
+        engine,
+        output_path=str(tearsheet_path),
+        title="Hyperliquid Multi-Asset Strategy - binance candle",
+        config=tearsheet_config,
+    )
     print(f"Tearsheet written to: {tearsheet_path}")
 
     engine.dispose()

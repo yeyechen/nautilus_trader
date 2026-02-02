@@ -154,6 +154,85 @@ def _calculate_drawdown(returns: pd.Series) -> pd.Series:
     return (cumulative - running_max) / running_max * 100
 
 
+def _calculate_dollar_drawdown(equity_series: pd.Series) -> pd.Series:
+    if equity_series.empty:
+        return pd.Series(dtype=float)
+    running_max = equity_series.cummax()
+    return equity_series - running_max
+
+
+def _extract_dollar_equity(  # noqa: C901
+    engine, currency=None
+) -> tuple[pd.Series | None, str | None]:
+    """
+    Extract dollar equity series from backtest engine account events.
+
+    Parameters
+    ----------
+    engine : BacktestEngine
+        The backtest engine with completed run.
+    currency : Currency, optional
+        Currency to extract. If None, uses first available currency.
+
+    Returns
+    -------
+    tuple[pd.Series | None, str | None]
+        Dollar equity series with datetime index, and currency code string.
+        Returns (None, None) if extraction fails.
+
+    """
+    if engine is None:
+        return None, None
+
+    try:
+        venues = engine.list_venues()
+        if not venues:
+            return None, None
+
+        for venue in venues:
+            account = engine.kernel.cache.account_for_venue(venue)
+            if account is None or not account.events:
+                continue
+
+            # Determine currency
+            if currency is None:
+                starting_balances = account.starting_balances()
+                if not starting_balances:
+                    continue
+                currency = next(iter(starting_balances.keys()))
+
+            currency_code = str(currency)
+
+            # Extract balance history from account events
+            from nautilus_trader.core.datetime import unix_nanos_to_dt
+            from nautilus_trader.model.events import AccountState
+
+            timestamps = []
+            balances = []
+
+            for event in account.events:
+                if isinstance(event, AccountState):
+                    ts = unix_nanos_to_dt(event.ts_event)
+                    for balance in event.balances:
+                        if str(balance.currency) == currency_code:
+                            timestamps.append(ts)
+                            balances.append(float(balance.total))
+                            break
+
+            if timestamps and balances:
+                equity_series = pd.Series(balances, index=timestamps)
+                equity_series = equity_series.sort_index()
+                equity_series = equity_series[
+                    ~equity_series.index.duplicated(keep="last")
+                ]
+                return equity_series, currency_code
+
+    except Exception:
+        pass
+
+    return None, None
+
+
 def register_chart(name: str, func: Callable | None = None) -> Callable | None:
     """
     Register a custom chart function for use in tearsheets.
@@ -618,6 +697,78 @@ def create_equity_curve(
     return fig
 
 
+def create_dollar_equity_curve(
+    engine,
+    output_path: str | None = None,
+    title: str = "Dollar Equity Curve",
+    currency=None,
+) -> go.Figure:
+    """
+    Create an interactive equity curve plot using real dollar values from account history.
+
+    Parameters
+    ----------
+    engine : BacktestEngine
+        The backtest engine with completed run.
+    output_path : str, optional
+        Path to save HTML plot. If None, plot is not saved.
+    title : str, default "Dollar Equity Curve"
+        Plot title.
+    currency : Currency, optional
+        Currency to extract. If None, uses first available currency.
+
+    Returns
+    -------
+    go.Figure
+        Plotly figure object.
+
+    Raises
+    ------
+    ImportError
+        If plotly is not installed.
+    ValueError
+        If no dollar equity data could be extracted from the engine.
+
+    """
+    if not PLOTLY_AVAILABLE:
+        msg = (
+            "plotly is required for visualization. "
+            "Install it with: pip install nautilus_trader[visualization]"
+        )
+        raise ImportError(msg)
+
+    dollar_equity, currency_code = _extract_dollar_equity(engine, currency)
+
+    if dollar_equity is None or dollar_equity.empty:
+        raise ValueError("Could not extract dollar equity from engine account history")
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=dollar_equity.index,
+            y=dollar_equity.values,
+            mode="lines",
+            name="Strategy",
+            line={"color": "#1f77b4", "width": 2},
+            hovertemplate="<b>%{x}</b><br>Equity: %{y:,.2f}<extra></extra>",
+        ),
+    )
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="Date",
+        yaxis_title=f"Equity ({currency_code})",
+        hovermode="x unified",
+        template="plotly_white",
+        height=500,
+    )
+
+    if output_path:
+        fig.write_html(output_path)
+
+    return fig
+
+
 def create_drawdown_chart(
     returns: pd.Series,
     output_path: str | None = None,
@@ -679,6 +830,58 @@ def create_drawdown_chart(
         title=title,
         xaxis_title="Date",
         yaxis_title="Drawdown (%)",
+        hovermode="x unified",
+        template=theme_config["template"],
+        height=400,
+    )
+
+    if output_path:
+        fig.write_html(output_path)
+
+    return fig
+
+
+def create_dollar_drawdown_chart(
+    engine,
+    output_path: str | None = None,
+    title: str = "Drawdown",
+    theme: str = "plotly_white",
+) -> go.Figure:
+    if not PLOTLY_AVAILABLE:
+        msg = (
+            "plotly is required for visualization. "
+            "Install it with: pip install nautilus_trader[visualization]"
+        )
+        raise ImportError(msg)
+
+    from nautilus_trader.analysis.themes import get_theme
+
+    equity_series, currency_code = _extract_dollar_equity(engine)
+    if equity_series is None:
+        raise ValueError("Could not extract dollar equity from engine")
+
+    theme_config = _normalize_theme_config(get_theme(theme))
+    drawdown = _calculate_dollar_drawdown(equity_series)
+    neg_color = theme_config["colors"]["negative"]
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=drawdown.index,
+            y=drawdown.values,
+            mode="lines",
+            name="Drawdown",
+            fill="tozeroy",
+            line={"color": neg_color, "width": 1},
+            fillcolor=_hex_to_rgba(neg_color, 0.3),
+            hovertemplate=f"<b>%{{x}}</b><br>Drawdown: %{{y:,.2f}} {currency_code}<extra></extra>",
+        ),
+    )
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="Date",
+        yaxis_title=f"Drawdown ({currency_code})",
         hovermode="x unified",
         template=theme_config["template"],
         height=400,
@@ -1355,15 +1558,30 @@ def _render_equity(
     theme_config: dict[str, Any],
     benchmark_returns: pd.Series | None = None,
     benchmark_name: str = "Benchmark",
+    engine=None,
     **kwargs: Any,
 ) -> None:
     """
     Render equity curve with optional benchmark.
+
+    When engine is available, plots real dollar equity from account balance history.
+    Otherwise falls back to percentage-based equity (1 + returns).cumprod().
     """
     if returns.empty:
         return
 
-    equity = (1 + returns).cumprod()
+    # Try to extract dollar equity from engine
+    dollar_equity, currency_code = _extract_dollar_equity(engine)
+
+    if dollar_equity is not None and not dollar_equity.empty:
+        # Use real dollar equity
+        equity = dollar_equity
+        y_axis_label = f"Equity ({currency_code})"
+    else:
+        # Fallback to percentage-based equity
+        equity = (1 + returns).cumprod()
+        y_axis_label = "Equity"
+
     fig.add_trace(
         go.Scatter(
             x=equity.index,
@@ -1379,6 +1597,10 @@ def _render_equity(
 
     if benchmark_returns is not None and not benchmark_returns.empty:
         benchmark_equity = (1 + benchmark_returns).cumprod()
+        # Scale benchmark to match starting value if using dollar equity
+        if dollar_equity is not None and not dollar_equity.empty:
+            starting_value = equity.iloc[0]
+            benchmark_equity = benchmark_equity * starting_value
         fig.add_trace(
             go.Scatter(
                 x=benchmark_equity.index,
@@ -1393,7 +1615,7 @@ def _render_equity(
         )
 
     fig.update_xaxes(title_text="Date", row=row, col=col)
-    fig.update_yaxes(title_text="Equity", row=row, col=col)
+    fig.update_yaxes(title_text=y_axis_label, row=row, col=col)
 
 
 def _render_drawdown(
@@ -1404,10 +1626,18 @@ def _render_drawdown(
     theme_config: dict[str, Any],
     **kwargs: Any,
 ) -> None:
-    """
-    Render drawdown chart.
-    """
-    drawdown = _calculate_drawdown(returns)
+    engine = kwargs.get("engine")
+    equity_series, currency_code = _extract_dollar_equity(engine) if engine else (None, None)
+
+    if equity_series is not None:
+        drawdown = _calculate_dollar_drawdown(equity_series)
+        y_label = f"Drawdown ({currency_code})"
+        hover_template = f"<b>%{{x}}</b><br>Drawdown: %{{y:,.2f}} {currency_code}<extra></extra>"
+    else:
+        drawdown = _calculate_drawdown(returns)
+        y_label = "Drawdown (%)"
+        hover_template = "<b>%{x}</b><br>Drawdown: %{y:.2f}%<extra></extra>"
+
     neg_color = theme_config["colors"]["negative"]
 
     fig.add_trace(
@@ -1418,15 +1648,16 @@ def _render_drawdown(
             name="Drawdown",
             fill="tozeroy",
             line={"color": neg_color, "width": 1},
-            fillcolor=_hex_to_rgba(neg_color, 0.3),  # 30% opacity
+            fillcolor=_hex_to_rgba(neg_color, 0.3),
             showlegend=False,
+            hovertemplate=hover_template,
         ),
         row=row,
         col=col,
     )
 
     fig.update_xaxes(title_text="Date", row=row, col=col)
-    fig.update_yaxes(title_text="Drawdown (%)", row=row, col=col)
+    fig.update_yaxes(title_text=y_label, row=row, col=col)
 
 
 def _render_monthly_returns(

@@ -33,6 +33,8 @@ from nautilus_trader.analysis.config import TearsheetStatsTableChart
 from nautilus_trader.analysis.config import TearsheetYearlyReturnsChart
 from nautilus_trader.analysis.reporter import ReportProvider
 from nautilus_trader.analysis.statistic import PortfolioStatistic
+from nautilus_trader.analysis.tearsheet import create_dollar_drawdown_chart
+from nautilus_trader.analysis.tearsheet import create_dollar_equity_curve
 from nautilus_trader.analysis.tearsheet import create_drawdown_chart
 from nautilus_trader.analysis.tearsheet import create_equity_curve
 from nautilus_trader.analysis.tearsheet import create_monthly_returns_heatmap
@@ -106,6 +108,8 @@ __all__ = [
     "TearsheetStatsTableChart",
     "TearsheetYearlyReturnsChart",
     "WinRate",
+    "create_dollar_drawdown_chart",
+    "create_dollar_equity_curve",
     "create_drawdown_chart",
     "create_equity_curve",
     "create_monthly_returns_heatmap",

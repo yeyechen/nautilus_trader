@@ -37,6 +37,8 @@ class MyStrategy(Strategy):
         self.instrument_id_map: dict[str, InstrumentId] = {}
         self.signals_df: pd.DataFrame = None
         self.last_prices: dict[InstrumentId, float] = {}
+        # Daily position snapshots: list of dicts with date, positions, equity
+        self.daily_snapshots: list[dict] = []
 
     def on_start(self):
         self.signals_df = pd.read_parquet(self.config.signals_path)
@@ -88,10 +90,20 @@ class MyStrategy(Strategy):
             color=LogColor.CYAN,
         )
 
-        weights = self._get_weights_for_date(signal_date)
-        if not weights:
+        # Record daily position snapshot BEFORE rebalancing
+        self._record_daily_snapshot(current_date)
+
+        signal_weights = self._get_weights_for_date(signal_date)
+        if not signal_weights:
             self.log.warning(f"No signals for {signal_date}")
             return
+
+        # Get complete weights including positions to close (weight=0)
+        weights = self._get_complete_target_weights(signal_weights)
+        self.log.info(
+            f"Signals: {len(signal_weights)} symbols, "
+            f"Complete targets: {len(weights)} symbols (including closes)"
+        )
 
         account = self.portfolio.account(self.config.instrument_ids[0].venue)
         if not account:
@@ -143,6 +155,79 @@ class MyStrategy(Strategy):
         if day_signals.empty:
             return {}
         return dict(zip(day_signals["symbol"], day_signals["weight"], strict=True))
+
+    def _get_complete_target_weights(self, signal_weights: dict[str, float]) -> dict[str, float]:
+        """
+        Build complete target weights that include positions to be closed.
+        """
+        complete_weights = dict(signal_weights)  # Start with today's signal weights
+
+        # Add zero weights for positions that need to be closed
+        for instrument_id in self.instruments:
+            net_qty = self.portfolio.net_position(instrument_id)
+            if net_qty and float(net_qty) != 0.0:
+                # Extract signal symbol from instrument (e.g., "BTCUSDT-PERP" -> "BTC")
+                instrument_symbol = str(instrument_id.symbol)
+                signal_symbol = instrument_symbol.replace("USDT-PERP", "")
+
+                # If currently holding but not in signals, set target to 0 (close position)
+                complete_weights.setdefault(signal_symbol, 0.0)
+
+        return complete_weights
+
+    def _record_daily_snapshot(self, snapshot_date) -> None:
+        """Record current positions snapshot for daily analysis."""
+        account = self.portfolio.account(self.config.instrument_ids[0].venue)
+        total_equity = float(account.balance_total().as_double()) if account else 0.0
+
+        positions_data = []
+        for instrument_id in self.instruments:
+            net_qty = self.portfolio.net_position(instrument_id)
+            qty = float(net_qty) if net_qty else 0.0
+            if qty == 0.0:
+                continue
+
+            price = self.last_prices.get(instrument_id, 0.0)
+            notional = qty * price
+            side = "LONG" if qty > 0 else "SHORT"
+
+            # Extract symbol without venue suffix (e.g., "BTCUSDT-PERP" -> "BTC")
+            symbol = str(instrument_id.symbol).replace("USDT-PERP", "")
+
+            positions_data.append({
+                "symbol": symbol,
+                "instrument_id": str(instrument_id),
+                "side": side,
+                "quantity": qty,
+                "price": price,
+                "notional": notional,
+            })
+
+        self.daily_snapshots.append({
+            "date": snapshot_date,
+            "equity": total_equity,
+            "num_positions": len(positions_data),
+            "positions": positions_data,
+        })
+
+    def get_daily_snapshots_df(self) -> pd.DataFrame:
+        """Convert daily snapshots to a flat DataFrame for analysis."""
+        rows = []
+        for snapshot in self.daily_snapshots:
+            date = snapshot["date"]
+            equity = snapshot["equity"]
+            for pos in snapshot["positions"]:
+                rows.append({
+                    "date": date,
+                    "equity": equity,
+                    "symbol": pos["symbol"],
+                    "instrument_id": pos["instrument_id"],
+                    "side": pos["side"],
+                    "quantity": pos["quantity"],
+                    "price": pos["price"],
+                    "notional": pos["notional"],
+                })
+        return pd.DataFrame(rows)
 
     def _find_instrument_id(self, instrument_symbol: str) -> InstrumentId | None:
         return self.instrument_id_map.get(instrument_symbol)

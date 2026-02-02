@@ -71,7 +71,7 @@ def create_instrument(
         max_quantity=None,
         min_quantity=None,
         max_notional=None,
-        min_notional=Money(10.00, USDT),
+        min_notional=None,
         max_price=Price.from_str("1000000.00"),
         min_price=Price.from_str("0.01"),
         margin_init=Decimal("0.05"),
@@ -131,7 +131,7 @@ def _load_hyperliquid_bars(
     raw_symbol = str(instrument.raw_symbol)
     base_symbol = raw_symbol.replace("USDT", "")
 
-    pattern = f"hyperliquid_{base_symbol}_hourly_*.parquet"
+    pattern = f"hyperliquid_{base_symbol}_*.parquet"
     files = list((data_dir / "hyperliquid").glob(pattern))
     if not files:
         raise FileNotFoundError(f"No data file found for {base_symbol}")

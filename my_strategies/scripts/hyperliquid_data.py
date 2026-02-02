@@ -16,8 +16,6 @@ COLUMNS = [
     "time",
     "coin",
     "funding",
-    "open_interest",
-    "prev_day_px",
     "day_ntl_vlm",
     "premium",
     "oracle_px",
@@ -28,13 +26,14 @@ COLUMNS = [
 ]
 
 
-def load_hyperliquid_hourly(
+def load_hyperliquid_data(
     coin: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
     save_to_file: bool = True,
     output_dir: Path | None = None,
 ) -> pd.DataFrame:
+    """This function fetches data within 00:00 o'clock UTC"""
     config = get_signal_db_config()
     conn = ClickHouseConnection(config)
 
@@ -43,8 +42,6 @@ def load_hyperliquid_hourly(
         toTimeZone(time, 'UTC') AS time,
         coin,
         funding,
-        open_interest,
-        prev_day_px,
         day_ntl_vlm,
         premium,
         oracle_px,
@@ -53,23 +50,27 @@ def load_hyperliquid_hourly(
         impact_bid_px,
         impact_ask_px
     FROM hyperliquid.asset_ctx
-    WHERE toMinute(toTimeZone(time, 'UTC')) = 0
-      AND toSecond(toTimeZone(time, 'UTC')) = 0
     """
 
     params = {}
+    conditions = [
+        "toHour(toTimeZone(time, 'UTC')) = 0",
+    ]
 
     if coin is not None:
-        query += " AND coin = %(coin)s"
+        conditions.append("coin = %(coin)s")
         params["coin"] = coin
 
     if start_date is not None:
-        query += " AND time >= %(start_date)s"
+        conditions.append("time >= %(start_date)s")
         params["start_date"] = start_date
 
     if end_date is not None:
-        query += " AND time <= %(end_date)s"
+        conditions.append("time <= %(end_date)s")
         params["end_date"] = end_date
+
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
 
     query += " ORDER BY time ASC"
 
@@ -77,16 +78,20 @@ def load_hyperliquid_hourly(
         results = conn.execute(query, params)
         df = pd.DataFrame(results, columns=COLUMNS)
 
-        if "time" in df.columns and not pd.api.types.is_datetime64_any_dtype(df["time"]):
+        if "time" in df.columns and not pd.api.types.is_datetime64_any_dtype(
+            df["time"]
+        ):
             df["time"] = pd.to_datetime(df["time"])
 
         if save_to_file and len(df) > 0:
             out_path = output_dir if output_dir else OUTPUT_DIR
             out_path.mkdir(parents=True, exist_ok=True)
 
-            timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")  # noqa: UP017
+            timestamp_str = datetime.now(timezone.utc).strftime(
+                "%Y%m%d_%H%M%S"
+            )  # noqa: UP017
             coin_part = coin if coin else "all_coins"
-            filename = f"hyperliquid_{coin_part}_hourly_{timestamp_str}.parquet"
+            filename = f"hyperliquid_{coin_part}_{timestamp_str}.parquet"
             file_path = out_path / filename
 
             df.to_parquet(file_path, index=False)
@@ -116,14 +121,13 @@ def get_unique_coins() -> list[str]:
 
 
 if __name__ == "__main__":
-    START_DATE = "2025-01-01"
-    END_DATE = "2025-12-31"
+    START_DATE = "2024-12-01"
+    END_DATE = "2026-01-31"
 
     print("=" * 60)
     print("HYPERLIQUID DATA LOADER")
     print("=" * 60)
     print(f"Date range: {START_DATE} to {END_DATE}")
-    print("Filter: Hourly data (minute=0, second=0) UTC")
     print(f"Output: {OUTPUT_DIR}")
     print("=" * 60)
 
@@ -138,7 +142,7 @@ if __name__ == "__main__":
     for i, coin in enumerate(coins, 1):
         try:
             print(f"[{i}/{len(coins)}] Processing {coin}...")
-            df = load_hyperliquid_hourly(
+            df = load_hyperliquid_data(
                 coin=coin,
                 start_date=START_DATE,
                 end_date=END_DATE,
