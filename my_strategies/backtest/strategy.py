@@ -2,6 +2,7 @@ from datetime import timedelta
 
 import pandas as pd
 
+from my_strategies.signal_handler.signal_handler import SignalHandler
 from nautilus_trader.common.enums import LogColor
 from nautilus_trader.common.events import TimeEvent
 from nautilus_trader.config import StrategyConfig
@@ -15,11 +16,6 @@ from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.trading.strategy import Strategy
 
 
-CAPITAL_RESERVE_PCT = 0.05  # 5% reserve, 95% capital in use
-MIN_ORDER_NOTIONAL = 10.0  # Minimum order value in USD
-SIGNAL_OFFSET_DAYS = 2  # Fetch signals from 2 days ago
-
-
 class MyStrategyConfig(StrategyConfig, frozen=True):
     instrument_ids: tuple[InstrumentId, ...]
     bar_types: tuple[BarType, ...]
@@ -27,6 +23,9 @@ class MyStrategyConfig(StrategyConfig, frozen=True):
     symbol_mapping: dict[
         str, str
     ]  # signal symbol -> instrument symbol (e.g., "BTC" -> "BTCUSDT-PERP")
+    capital_reserve_pct: float = 0.05  # 5% reserve, 95% capital in use
+    min_order_notional: float = 10.0  # Minimum order value in USD
+    signal_offset_days: int = 2  # Fetch signals from N days ago
 
 
 class MyStrategy(Strategy):
@@ -54,6 +53,11 @@ class MyStrategy(Strategy):
             else:
                 self.log.warning(f"Instrument not found: {instrument_id}")
 
+        # Reverse: instrument_symbol -> signal_symbol (e.g., "BTCUSDT-PERP" -> "BTC")
+        self.reverse_symbol_mapping: dict[str, str] = {
+            v: k for k, v in self.config.symbol_mapping.items()
+        }
+
         for bar_type in self.config.bar_types:
             self.subscribe_bars(bar_type)
 
@@ -69,6 +73,16 @@ class MyStrategy(Strategy):
             color=LogColor.GREEN,
         )
 
+    def _get_total_equity(self) -> float:
+        """Return total equity including unrealized PnL (matches live account_value)."""
+        venue = self.config.instrument_ids[0].venue
+        account = self.portfolio.account(venue)
+        balance = float(account.balance_total().as_double()) if account else 0.0
+        unrealized_pnls = self.portfolio.unrealized_pnls(venue)
+        if unrealized_pnls:
+            balance += sum(float(pnl.as_double()) for pnl in unrealized_pnls.values())
+        return balance
+
     def _get_first_rebalance_time(self) -> pd.Timestamp:
         now = self.clock.utc_now()
         today_midnight = now.normalize()
@@ -83,7 +97,7 @@ class MyStrategy(Strategy):
     def on_rebalance(self, event: TimeEvent):
         current_time = unix_nanos_to_dt(event.ts_event)
         current_date = current_time.date()
-        signal_date = current_date - timedelta(days=SIGNAL_OFFSET_DAYS)
+        signal_date = current_date - timedelta(days=self.config.signal_offset_days)
         self.log.info(
             f"Rebalance triggered at {current_time.strftime('%Y-%m-%d %H:%M:%S')} UTC, "
             f"using signals from {signal_date}",
@@ -98,6 +112,12 @@ class MyStrategy(Strategy):
             self.log.warning(f"No signals for {signal_date}")
             return
 
+        if not SignalHandler.validate_target_weights(signal_weights):
+            self.log.error(f"Invalid signal weights for {signal_date}: {signal_weights}")
+            return
+
+        signal_weights = SignalHandler.normalize_weights(signal_weights)
+
         # Get complete weights including positions to close (weight=0)
         weights = self._get_complete_target_weights(signal_weights)
         self.log.info(
@@ -105,13 +125,12 @@ class MyStrategy(Strategy):
             f"Complete targets: {len(weights)} symbols (including closes)"
         )
 
-        account = self.portfolio.account(self.config.instrument_ids[0].venue)
-        if not account:
-            self.log.error("No account found")
+        total_equity = self._get_total_equity()
+        if total_equity <= 0:
+            self.log.error("No account equity")
             return
 
-        total_equity = float(account.balance_total().as_double())
-        capital_in_use = total_equity * (1 - CAPITAL_RESERVE_PCT)
+        capital_in_use = total_equity * (1 - self.config.capital_reserve_pct)
         self.log.info(
             f"Account equity: {total_equity:.2f}, capital in use: {capital_in_use:.2f}"
         )
@@ -142,9 +161,9 @@ class MyStrategy(Strategy):
             delta_qty = target_qty - current_qty
             delta_notional = abs(delta_qty * current_price)
 
-            if delta_notional < MIN_ORDER_NOTIONAL:
+            if delta_notional < self.config.min_order_notional:
                 self.log.warning(
-                    f"Order too small for {signal_symbol}: ${delta_notional:.2f} < ${MIN_ORDER_NOTIONAL}"
+                    f"Order too small for {signal_symbol}: ${delta_notional:.2f} < ${self.config.min_order_notional}"
                 )
                 continue
 
@@ -166,9 +185,10 @@ class MyStrategy(Strategy):
         for instrument_id in self.instruments:
             net_qty = self.portfolio.net_position(instrument_id)
             if net_qty and float(net_qty) != 0.0:
-                # Extract signal symbol from instrument (e.g., "BTCUSDT-PERP" -> "BTC")
                 instrument_symbol = str(instrument_id.symbol)
-                signal_symbol = instrument_symbol.replace("USDT-PERP", "")
+                signal_symbol = self.reverse_symbol_mapping.get(instrument_symbol)
+                if signal_symbol is None:
+                    continue
 
                 # If currently holding but not in signals, set target to 0 (close position)
                 complete_weights.setdefault(signal_symbol, 0.0)
@@ -177,8 +197,7 @@ class MyStrategy(Strategy):
 
     def _record_daily_snapshot(self, snapshot_date) -> None:
         """Record current positions snapshot for daily analysis."""
-        account = self.portfolio.account(self.config.instrument_ids[0].venue)
-        total_equity = float(account.balance_total().as_double()) if account else 0.0
+        total_equity = self._get_total_equity()
 
         positions_data = []
         for instrument_id in self.instruments:
@@ -191,8 +210,8 @@ class MyStrategy(Strategy):
             notional = qty * price
             side = "LONG" if qty > 0 else "SHORT"
 
-            # Extract symbol without venue suffix (e.g., "BTCUSDT-PERP" -> "BTC")
-            symbol = str(instrument_id.symbol).replace("USDT-PERP", "")
+            instrument_symbol = str(instrument_id.symbol)
+            symbol = self.reverse_symbol_mapping.get(instrument_symbol, instrument_symbol)
 
             positions_data.append({
                 "symbol": symbol,
@@ -249,5 +268,21 @@ class MyStrategy(Strategy):
             f"Submitted {side.name} {quantity} {instrument_id}", color=LogColor.YELLOW
         )
 
-    def on_stop(self):
-        self.log.info("Strategy stopped")
+    def on_stop(self) -> None:
+        for instrument_id in self.instruments:
+            self.cancel_all_orders(instrument_id)
+            self.close_all_positions(instrument_id)
+        for bar_type in self.config.bar_types:
+            self.unsubscribe_bars(bar_type)
+        self.log.info("Strategy stopped — all orders cancelled, positions closed")
+
+    def on_reset(self) -> None:
+        self.instruments.clear()
+        self.instrument_id_map.clear()
+        self.reverse_symbol_mapping.clear()
+        self.signals_df = None
+        self.last_prices.clear()
+        self.daily_snapshots.clear()
+
+    def on_dispose(self) -> None:
+        self.signals_df = None

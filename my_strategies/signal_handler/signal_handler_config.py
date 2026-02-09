@@ -21,5 +21,4 @@ def get_signal_handler_config() -> SignalHandlerConfig:
         signal_database_name=os.getenv("SIGNAL_DATABASE_NAME"),
         signal_table_name=os.getenv("SIGNAL_TABLE_NAME"),
         timezone=ZoneInfo(os.getenv("TIMEZONE", "UTC")),
-        signal_offset_days=int(os.getenv("SIGNAL_OFFSET_DAYS", "1")),
     )

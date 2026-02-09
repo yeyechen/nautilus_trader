@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal
 from pathlib import Path
 
@@ -12,7 +13,6 @@ from nautilus_trader.model.identifiers import Symbol
 from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.instruments import CryptoPerpetual
 from nautilus_trader.model.objects import Currency
-from nautilus_trader.model.objects import Money
 from nautilus_trader.model.objects import Price
 from nautilus_trader.model.objects import Quantity
 from nautilus_trader.persistence.wranglers import BarDataWrangler
@@ -52,9 +52,16 @@ def get_available_symbols(
 def create_instrument(
     base_symbol: str,
     venue: Venue | None = None,
+    price_precision: int = 2,
+    size_precision: int = 8,
+    maker_fee: Decimal = Decimal("0.0002"),
+    taker_fee: Decimal = Decimal("0.0004"),
 ) -> CryptoPerpetual:
     if venue is None:
         venue = BINANCE
+
+    price_increment = Price(10 ** -price_precision, price_precision)
+    size_increment = Quantity(10 ** -size_precision, size_precision)
 
     base_currency = Currency.from_str(base_symbol)
     return CryptoPerpetual(
@@ -64,20 +71,20 @@ def create_instrument(
         quote_currency=USDT,
         settlement_currency=USDT,
         is_inverse=False,
-        price_precision=2,
-        price_increment=Price.from_str("0.01"),
-        size_precision=8,
-        size_increment=Quantity.from_str("0.00000001"),
+        price_precision=price_precision,
+        price_increment=price_increment,
+        size_precision=size_precision,
+        size_increment=size_increment,
         max_quantity=None,
         min_quantity=None,
         max_notional=None,
         min_notional=None,
         max_price=Price.from_str("1000000.00"),
-        min_price=Price.from_str("0.01"),
+        min_price=price_increment,
         margin_init=Decimal("0.05"),
         margin_maint=Decimal("0.025"),
-        maker_fee=Decimal("0.0002"),
-        taker_fee=Decimal("0.0004"),
+        maker_fee=maker_fee,
+        taker_fee=taker_fee,
         ts_event=0,
         ts_init=0,
     )
@@ -153,6 +160,37 @@ def _load_hyperliquid_bars(
 
     wrangler = BarDataWrangler(bar_type, instrument)
     return wrangler.process(df)
+
+
+HYPERLIQUID_PX_MAX_DECIMALS = 6
+
+
+def load_hyperliquid_instrument_specs(
+    meta_path: Path | None = None,
+) -> dict[str, dict]:
+    """
+    Load per-symbol size/price precision from Hyperliquid metadata JSON.
+
+    Returns a dict keyed by symbol (e.g. "BTC") with keys:
+        size_precision, price_precision
+    """
+    if meta_path is None:
+        meta_path = DATA_DIR / "hyperliquid_meta_and_ctx" / "full_meta_and_ctx_20260109.json"
+
+    with open(meta_path) as f:
+        raw = json.load(f)
+
+    meta = raw[0]  # [meta_dict, ctxs_list]
+    specs: dict[str, dict] = {}
+    for asset in meta["universe"]:
+        symbol = asset["name"]
+        sz_decimals = int(asset["szDecimals"])
+        px_decimals = max(0, HYPERLIQUID_PX_MAX_DECIMALS - sz_decimals)
+        specs[symbol] = {
+            "size_precision": sz_decimals,
+            "price_precision": px_decimals,
+        }
+    return specs
 
 
 def configure_crypto_statistics(engine, period: int = 365):
