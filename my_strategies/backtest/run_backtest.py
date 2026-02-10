@@ -10,6 +10,9 @@ from fill_model import FixedBpsSlippageFillModel
 from strategy import MyStrategy
 from strategy import MyStrategyConfig
 
+from my_analysis import GridLayout
+from my_analysis import TearsheetConfig
+from my_analysis import create_tearsheet
 from my_strategies.utils import BINANCE
 from my_strategies.utils import HYPERLIQUID
 from my_strategies.utils import configure_crypto_statistics
@@ -17,9 +20,6 @@ from my_strategies.utils import create_instrument
 from my_strategies.utils import get_available_symbols
 from my_strategies.utils import load_bars
 from my_strategies.utils import load_hyperliquid_instrument_specs
-from nautilus_trader.analysis import GridLayout
-from nautilus_trader.analysis import TearsheetConfig
-from nautilus_trader.analysis import create_tearsheet
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.config import BacktestEngineConfig
 from nautilus_trader.config import LoggingConfig
@@ -42,14 +42,13 @@ SIGNALS_PATH = (
     DEFAULT_DATA_DIR / "signal" / "signals_2024-12-01_2026-01-31_20260201_122240.parquet"
 )
 
-FIXED_SLIPPAGE_BPS = 5.0
-
 def run_backtest(
     venue_key: str,
     signals_path: Path = SIGNALS_PATH,
     data_dir: Path = DEFAULT_DATA_DIR,
     log_dir: Path = DEFAULT_LOG_DIR,
     start_capital: float = 100_000,
+    fixed_slippage_bps: float = 5.0
 ) -> None:
     venue_config = VENUE_CONFIGS[venue_key]
     venue = venue_config["venue"]
@@ -77,7 +76,7 @@ def run_backtest(
         starting_balances=[Money(start_capital, USDT)],
         base_currency=USDT,
         default_leverage=Decimal(1),
-        fill_model=FixedBpsSlippageFillModel(slippage_bps=FIXED_SLIPPAGE_BPS),
+        fill_model=FixedBpsSlippageFillModel(slippage_bps=fixed_slippage_bps),
     )
 
     symbols = get_available_symbols(signals_path, data_dir, venue=venue_key)
@@ -156,10 +155,18 @@ def run_backtest(
         ),
     )
     tearsheet_path = log_dir / f"tearsheet_{venue_key}_{timestamp}.html"
+    title = (
+        f"{venue_name} Multi-Asset Strategy | "
+        f"Capital: ${start_capital:,.0f} | "
+        f"Slippage: {fixed_slippage_bps} bps | "
+        f"Reserve: {config.capital_reserve_pct*100:.0f}% | "
+        f"Min Order: ${config.min_order_notional:.0f} | "
+        f"Signal Offset: {config.signal_offset_days}d"
+    )
     create_tearsheet(
         engine,
         output_path=str(tearsheet_path),
-        title=f"{venue_name} Multi-Asset Strategy",
+        title=title,
         config=tearsheet_config,
     )
     print(f"Tearsheet written to: {tearsheet_path}")

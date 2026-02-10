@@ -25,7 +25,7 @@ class MyStrategyConfig(StrategyConfig, frozen=True):
     ]  # signal symbol -> instrument symbol (e.g., "BTC" -> "BTCUSDT-PERP")
     capital_reserve_pct: float = 0.05  # 5% reserve, 95% capital in use
     min_order_notional: float = 10.0  # Minimum order value in USD
-    signal_offset_days: int = 2  # Fetch signals from N days ago
+    signal_offset_days: int = 1  # Fetch signals from N days ago
 
 
 class MyStrategy(Strategy):
