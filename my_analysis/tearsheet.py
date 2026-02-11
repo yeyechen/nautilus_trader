@@ -30,6 +30,9 @@ from typing import Any
 
 import pandas as pd
 
+from nautilus_trader.analysis import ReturnsVolatility
+from nautilus_trader.analysis import SharpeRatio
+from nautilus_trader.analysis import SortinoRatio
 from nautilus_trader.analysis import TearsheetChart
 from nautilus_trader.core.correctness import PyCondition
 from nautilus_trader.core.datetime import format_optional_iso8601
@@ -161,11 +164,48 @@ def _calculate_dollar_drawdown(equity_series: pd.Series) -> pd.Series:
     return equity_series - running_max
 
 
+def _extract_equity_from_strategies(engine) -> pd.Series | None:
+    """
+    Try to extract a daily equity series from strategy ``daily_snapshots``.
+
+    Strategies that record daily snapshots (via ``_get_total_equity``) capture
+    true portfolio equity **including unrealized PnL**, which is more accurate
+    than ``AccountState.balance.total`` (balance only, no unrealized PnL).
+
+    Returns ``None`` if no strategy exposes ``daily_snapshots``.
+    """
+    if engine is None:
+        return None
+
+    try:
+        for strategy in engine.trader.strategies():
+            snapshots = getattr(strategy, "daily_snapshots", None)
+            if not snapshots:
+                continue
+
+            dates = []
+            equities = []
+            for snap in snapshots:
+                dates.append(snap["date"])
+                equities.append(snap["equity"])
+
+            if len(dates) >= 2:
+                equity = pd.Series(equities, index=pd.to_datetime(dates))
+                return equity.sort_index()
+    except Exception:
+        pass
+
+    return None
+
+
 def _extract_dollar_equity(  # noqa: C901
     engine, currency=None
 ) -> tuple[pd.Series | None, str | None]:
     """
-    Extract dollar equity series from backtest engine account events.
+    Extract dollar equity series from backtest engine.
+
+    Prefers strategy-recorded equity (which includes unrealized PnL) over
+    AccountState balance (which excludes unrealized PnL).
 
     Parameters
     ----------
@@ -184,17 +224,34 @@ def _extract_dollar_equity(  # noqa: C901
     if engine is None:
         return None, None
 
+    # Determine currency code for the return value
+    currency_code = None
     try:
         venues = engine.list_venues()
-        if not venues:
-            return None, None
+        if venues:
+            account = engine.kernel.cache.account_for_venue(venues[0])
+            if account is not None:
+                if currency is None:
+                    starting_balances = account.starting_balances()
+                    if starting_balances:
+                        currency = next(iter(starting_balances.keys()))
+                if currency is not None:
+                    currency_code = str(currency)
+    except Exception:
+        pass
 
-        for venue in venues:
+    # Prefer strategy equity (includes unrealized PnL)
+    strategy_equity = _extract_equity_from_strategies(engine)
+    if strategy_equity is not None and not strategy_equity.empty:
+        return strategy_equity, currency_code or "USD"
+
+    # Fallback: AccountState balance (excludes unrealized PnL)
+    try:
+        for venue in engine.list_venues():
             account = engine.kernel.cache.account_for_venue(venue)
             if account is None or not account.events:
                 continue
 
-            # Determine currency
             if currency is None:
                 starting_balances = account.starting_balances()
                 if not starting_balances:
@@ -203,7 +260,6 @@ def _extract_dollar_equity(  # noqa: C901
 
             currency_code = str(currency)
 
-            # Extract balance history from account events
             from nautilus_trader.core.datetime import unix_nanos_to_dt
             from nautilus_trader.model.events import AccountState
 
@@ -235,10 +291,12 @@ def _extract_dollar_equity(  # noqa: C901
 
 def _derive_daily_returns_from_equity(engine) -> pd.Series:
     """
-    Derive daily percentage returns from dollar equity (AccountState events).
+    Derive daily percentage returns from dollar equity.
 
-    This is the correct approach for NETTING mode where positions are long-lived
-    and analyzer.returns() only records returns at position close.
+    Prefers strategy-recorded equity (including unrealized PnL) when available,
+    falling back to AccountState balance. This is the correct approach for
+    NETTING mode where positions are long-lived and analyzer.returns() only
+    records returns at position close.
 
     """
     dollar_equity, _ = _extract_dollar_equity(engine)
@@ -368,6 +426,31 @@ def list_charts() -> list[str]:
     return list(_CHART_REGISTRY.keys())
 
 
+def _compute_total_commission(engine) -> dict[str, float]:
+    """Sum all commissions from OrderFilled events, grouped by currency."""
+    from nautilus_trader.model.events import OrderFilled
+
+    totals: dict[str, float] = {}
+    for order in engine.kernel.cache.orders():
+        for event in order.events:
+            if isinstance(event, OrderFilled):
+                cur = str(event.commission.currency)
+                totals[cur] = totals.get(cur, 0.0) + event.commission.as_double()
+    return totals
+
+
+def _swap_statistics_period(analyzer, period: int) -> None:
+    """Replace SharpeRatio, SortinoRatio, ReturnsVolatility with the given period."""
+    for old_name in ["Sharpe Ratio", "Sortino Ratio", "Returns Volatility"]:
+        keys_to_remove = [k for k in analyzer._statistics if k.startswith(old_name)]
+        for k in keys_to_remove:
+            del analyzer._statistics[k]
+
+    analyzer.register_statistic(SharpeRatio(period=period))
+    analyzer.register_statistic(SortinoRatio(period=period))
+    analyzer.register_statistic(ReturnsVolatility(period=period))
+
+
 def create_tearsheet(  # noqa: C901
     engine: BacktestEngine,
     output_path: str | None = "tearsheet.html",
@@ -419,24 +502,32 @@ def create_tearsheet(  # noqa: C901
     # Extract data from engine
     analyzer = engine.portfolio.analyzer
 
-    # Derive daily returns from dollar equity (AccountState events).
-    # This fixes the bug where analyzer.returns() only records returns
-    # at position close, causing incorrect monthly returns in NETTING mode.
+    # Derive daily returns from equity (including unrealized PnL).
     equity_returns = _derive_daily_returns_from_equity(engine)
 
     if not equity_returns.empty:
         returns = equity_returns
         # Temporarily inject corrected returns so get_performance_stats_returns()
         # computes Sharpe/Sortino/Volatility from daily equity returns.
+        # Also swap annualization period to 365 (crypto trades 24/7).
         original_returns = analyzer._returns
         analyzer._returns = returns
+
+        _swap_statistics_period(analyzer, period=TRADING_DAYS_PER_YEAR)
         stats_returns = analyzer.get_performance_stats_returns()
+        _swap_statistics_period(analyzer, period=252)  # restore defaults
+
         analyzer._returns = original_returns
     else:
         returns = analyzer.returns()
         stats_returns = analyzer.get_performance_stats_returns()
 
     stats_general = analyzer.get_performance_stats_general()
+
+    # Aggregate total commissions across all fills
+    commission_totals = _compute_total_commission(engine)
+    for cur, total in commission_totals.items():
+        stats_general[f"Total Commission ({cur})"] = total
 
     # Build title with strategy name(s) and run time
     if title == "NautilusTrader Backtest Results":
@@ -582,7 +673,7 @@ def create_tearsheet_from_stats(
     Examples
     --------
     >>> # Offline analysis with precomputed stats
-    >>> stats_returns = {"Sharpe Ratio (252 days)": 1.5, ...}
+    >>> stats_returns = {"Sharpe Ratio (365 days)": 1.5, ...}
     >>> stats_general = {"Win Rate": 0.55, ...}
     >>> stats_pnls = {"PnL (total)": 10000.0, ...}
     >>> returns = pd.Series([0.01, -0.02, ...])

@@ -15,7 +15,6 @@ from my_analysis import TearsheetConfig
 from my_analysis import create_tearsheet
 from my_strategies.utils import BINANCE
 from my_strategies.utils import HYPERLIQUID
-from my_strategies.utils import configure_crypto_statistics
 from my_strategies.utils import create_instrument
 from my_strategies.utils import get_available_symbols
 from my_strategies.utils import load_bars
@@ -67,7 +66,6 @@ def run_backtest(
         ),
     )
     engine = BacktestEngine(config=engine_config)
-    configure_crypto_statistics(engine)
 
     engine.add_venue(
         venue=venue,

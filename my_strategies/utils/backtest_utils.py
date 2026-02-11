@@ -54,8 +54,8 @@ def create_instrument(
     venue: Venue | None = None,
     price_precision: int = 2,
     size_precision: int = 8,
-    maker_fee: Decimal = Decimal("0.0002"),
-    taker_fee: Decimal = Decimal("0.0004"),
+    maker_fee: Decimal = Decimal("0.00015"), # Tier 0 maker fee in hyperliquid
+    taker_fee: Decimal = Decimal("0.00045"), # Tier 0 taker fee in hyperliquid
 ) -> CryptoPerpetual:
     if venue is None:
         venue = BINANCE
@@ -191,35 +191,3 @@ def load_hyperliquid_instrument_specs(
             "price_precision": px_decimals,
         }
     return specs
-
-
-def configure_crypto_statistics(engine, period: int = 365):
-    """
-    Configure analyzer statistics for crypto trading (365-day annualization).
-
-    Replaces the default 252-day (stock market) annualization with 365-day
-    annualization appropriate for 24/7 crypto markets.
-
-    Parameters
-    ----------
-    engine : BacktestEngine
-        The backtest engine instance.
-    period : int, default 365
-        The annualization period in days.
-
-    """
-    from nautilus_trader.analysis import ReturnsVolatility
-    from nautilus_trader.analysis import SharpeRatio
-    from nautilus_trader.analysis import SortinoRatio
-
-    analyzer = engine.portfolio.analyzer
-
-    # Deregister 252-day defaults
-    analyzer.deregister_statistic(SharpeRatio())
-    analyzer.deregister_statistic(SortinoRatio())
-    analyzer.deregister_statistic(ReturnsVolatility())
-
-    # Register with crypto-appropriate period
-    analyzer.register_statistic(SharpeRatio(period))
-    analyzer.register_statistic(SortinoRatio(period))
-    analyzer.register_statistic(ReturnsVolatility(period))
