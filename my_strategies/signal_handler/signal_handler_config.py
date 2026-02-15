@@ -11,7 +11,6 @@ class SignalHandlerConfig:
     database_config: ClickHouseConfig
     signal_database_name: str
     signal_table_name: str
-    signal_offset_days: int
     timezone: ZoneInfo
 
 

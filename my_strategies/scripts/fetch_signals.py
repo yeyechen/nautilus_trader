@@ -92,7 +92,7 @@ def fetch_signals_for_date_range(
 
 if __name__ == "__main__":
     START_DATE = "2024-12-01"
-    END_DATE = "2026-01-31"
+    END_DATE = "2026-02-13"
 
     print("=" * 60)
     print("SIGNAL DATA FETCHER")

@@ -1,6 +1,5 @@
 from datetime import datetime
 from datetime import timezone
-from math import isclose
 
 from .signal_handler_config import SignalHandlerConfig
 

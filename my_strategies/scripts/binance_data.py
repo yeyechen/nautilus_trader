@@ -7,10 +7,14 @@ from dotenv import load_dotenv
 
 from my_strategies.database.database_config import get_signal_db_config
 from my_strategies.database.database_connection import ClickHouseConnection
+from my_strategies.utils.data_fetching import get_unique_symbols
 
 
 # Load environment variables from .env file in project root
 load_dotenv(Path(__file__).parent.parent.parent / ".env")
+
+# Output directory for data files
+OUTPUT_DIR = Path(__file__).parent.parent / "data" / "binance_v2"
 
 
 def load_binance_klines_daily(
@@ -116,7 +120,7 @@ def load_binance_klines_daily(
         if save_to_file and len(df) > 0:
             # Use default data directory if not specified
             if output_dir is None:
-                output_path = Path(__file__).parent.parent / "data"
+                output_path = OUTPUT_DIR
             else:
                 output_path = Path(output_dir)
             output_path.mkdir(parents=True, exist_ok=True)
@@ -132,25 +136,6 @@ def load_binance_klines_daily(
 
         return df
 
-    finally:
-        conn.disconnect()
-
-
-def get_unique_symbols(interval: str = "1h") -> list[str]:
-    """Get list of all unique symbols in the database for a given interval."""
-    config = get_signal_db_config()
-    conn = ClickHouseConnection(config)
-
-    query = """
-    SELECT DISTINCT symbol
-    FROM binance.bn_perp_klines
-    WHERE interval = %(interval)s
-    ORDER BY symbol ASC
-    """
-
-    try:
-        results = conn.execute(query, {"interval": interval})
-        return [row[0] for row in results]
     finally:
         conn.disconnect()
 
@@ -186,8 +171,8 @@ def verify_timezone(df: pd.DataFrame) -> None:
 if __name__ == "__main__":
     # Configuration
     INTERVAL = "1h"
-    START_DATE = "2025-01-01"
-    END_DATE = "2025-12-31"
+    START_DATE = "2024-12-01"
+    END_DATE = "2026-02-13"
 
     print("=" * 80)
     print("BINANCE KLINES DATA LOADER")
@@ -195,12 +180,12 @@ if __name__ == "__main__":
     print(f"Interval: {INTERVAL}")
     print(f"Date range: {START_DATE} to {END_DATE}")
     print("Filter: 00:00 UTC timestamps only")
-    print("Output: /Users/mikey/Desktop/nautilus_trader/my_strategies/data/")
+    print(f"Output: {OUTPUT_DIR}")
     print("=" * 80)
 
-    # Get all unique symbols
-    print("\nFetching unique symbols from database...")
-    symbols = get_unique_symbols(interval=INTERVAL)
+    # Get all unique symbols from signal file
+    print("\nFetching unique symbols from signal file...")
+    symbols = get_unique_symbols()
     print(f"Found {len(symbols)} unique symbols")
 
     # Loop through each symbol and generate parquet file
@@ -224,7 +209,7 @@ if __name__ == "__main__":
                 print(f"  ✓ Loaded {len(df)} rows")
                 successful += 1
             else:
-                print(f"  ⚠ No data found")
+                print(f"No data found")
 
         except Exception as e:
             print(f"  ✗ Error: {e}")
@@ -237,5 +222,5 @@ if __name__ == "__main__":
     print(f"Total symbols: {len(symbols)}")
     print(f"Successful: {successful}")
     print(f"Failed: {failed}")
-    print("Output directory: /Users/mikey/Desktop/nautilus_trader/my_strategies/data/")
+    print(f"Output directory: {OUTPUT_DIR}")
     print("=" * 80)
