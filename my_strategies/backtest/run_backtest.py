@@ -38,7 +38,7 @@ VENUE_CONFIGS = {
 DEFAULT_DATA_DIR = Path(__file__).parent.parent / "data"
 DEFAULT_LOG_DIR = Path(__file__).parent.parent / "logs"
 SIGNALS_PATH = (
-    DEFAULT_DATA_DIR / "signal" / "signals_2024-12-01_2026-01-31_20260201_122240.parquet"
+    DEFAULT_DATA_DIR / "signal" / "signals_2024-12-01_2026-02-13_20260213_015447.parquet"
 )
 
 def run_backtest(
@@ -47,7 +47,8 @@ def run_backtest(
     data_dir: Path = DEFAULT_DATA_DIR,
     log_dir: Path = DEFAULT_LOG_DIR,
     start_capital: float = 100_000,
-    fixed_slippage_bps: float = 5.0
+    fixed_slippage_bps: float = 5.0,
+    start_date: datetime | None = None,
 ) -> None:
     venue_config = VENUE_CONFIGS[venue_key]
     venue = venue_config["venue"]
@@ -120,7 +121,7 @@ def run_backtest(
     engine.add_strategy(strategy)
 
     print("\nRunning backtest...")
-    engine.run()
+    engine.run(start=start_date)
 
     print("\n" + "=" * 60)
     print("RESULTS")
@@ -198,11 +199,22 @@ if __name__ == "__main__":
         default=100_000,
         help="Starting capital in USDT (default: 100000)",
     )
+    parser.add_argument(
+        "--start-date",
+        type=str,
+        default=None,
+        help="Backtest start date in YYYY-MM-DD format (default: use all data)",
+    )
     args = parser.parse_args()
+
+    bt_start_date = None
+    if args.start_date:
+        bt_start_date = datetime.strptime(args.start_date, "%Y-%m-%d").replace(tzinfo=UTC)
 
     run_backtest(
         venue_key=args.venue,
         data_dir=args.data_dir,
         log_dir=args.log_dir,
         start_capital=args.capital,
+        start_date=bt_start_date,
     )
