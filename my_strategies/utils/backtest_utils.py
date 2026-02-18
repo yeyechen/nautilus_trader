@@ -27,6 +27,7 @@ def get_available_symbols(
     signals_path: Path,
     data_dir: Path | None = None,
     venue: str = "binance",
+    external_data_dir: Path | None = None,
 ) -> list[str]:
     if data_dir is None:
         data_dir = DATA_DIR
@@ -35,7 +36,13 @@ def get_available_symbols(
     signal_symbols = set(signals_df["symbol"].unique())
 
     available = set()
-    if venue == "binance":
+    if external_data_dir is not None:
+        # External data: files named {BASE}USDT.parquet (e.g. BTCUSDT.parquet)
+        for f in external_data_dir.glob("*.parquet"):
+            stem = f.stem
+            if stem.endswith("USDT"):
+                available.add(stem[:-4])
+    elif venue == "binance":
         for f in (data_dir / "binance").glob("*.parquet"):
             parts = f.stem.split("_")
             if len(parts) >= 2 and parts[1].endswith("USDT"):
@@ -95,11 +102,14 @@ def load_bars(
     bar_type: BarType,
     data_dir: Path | None = None,
     venue: str = "binance",
+    external_data_dir: Path | None = None,
 ) -> list[Bar]:
     if data_dir is None:
         data_dir = DATA_DIR
 
-    if venue == "binance":
+    if external_data_dir is not None:
+        return _load_external_bars(instrument, bar_type, external_data_dir)
+    elif venue == "binance":
         return _load_binance_bars(instrument, bar_type, data_dir)
     elif venue == "hyperliquid":
         return _load_hyperliquid_bars(instrument, bar_type, data_dir)
@@ -119,6 +129,28 @@ def _load_binance_bars(
         raise FileNotFoundError(f"No data file found for {symbol}")
 
     df = pd.read_parquet(files[0])
+    df = df[["timestamp", "open", "high", "low", "close", "volume"]]
+    df[["open", "high", "low", "close", "volume"]] = df[
+        ["open", "high", "low", "close", "volume"]
+    ].astype(np.float64)
+    df = df.set_index("timestamp")
+
+    wrangler = BarDataWrangler(bar_type, instrument)
+    return wrangler.process(df)
+
+
+def _load_external_bars(
+    instrument: CryptoPerpetual,
+    bar_type: BarType,
+    external_data_dir: Path,
+) -> list[Bar]:
+    """Load bars from external data directory (files named {SYMBOL}USDT.parquet)."""
+    symbol = str(instrument.raw_symbol)  # e.g. "BTCUSDT"
+    filepath = external_data_dir / f"{symbol}.parquet"
+    if not filepath.exists():
+        raise FileNotFoundError(f"No data file found: {filepath}")
+
+    df = pd.read_parquet(filepath)
     df = df[["timestamp", "open", "high", "low", "close", "volume"]]
     df[["open", "high", "low", "close", "volume"]] = df[
         ["open", "high", "low", "close", "volume"]
