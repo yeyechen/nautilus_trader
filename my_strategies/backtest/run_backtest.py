@@ -10,7 +10,6 @@ from fill_model import FixedBpsSlippageFillModel
 from strategy import MyStrategy
 from strategy import MyStrategyConfig
 
-from my_analysis import GridLayout
 from my_analysis import TearsheetConfig
 from my_analysis import create_tearsheet
 from my_strategies.utils import BINANCE
@@ -49,10 +48,11 @@ def run_backtest(
     start_capital: float = 100_000,
     fixed_slippage_bps: float = 5.0,
     start_date: datetime | None = None,
+    bar_spec: str = "1-HOUR",
+    external_data_dir: Path | None = None,
 ) -> None:
     venue_config = VENUE_CONFIGS[venue_key]
     venue = venue_config["venue"]
-    venue_name = venue_config["name"]
 
     log_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
@@ -76,9 +76,10 @@ def run_backtest(
         base_currency=USDT,
         default_leverage=Decimal(1),
         fill_model=FixedBpsSlippageFillModel(slippage_bps=fixed_slippage_bps),
+        use_message_queue=False,
     )
 
-    symbols = get_available_symbols(signals_path, data_dir, venue=venue_key)
+    symbols = get_available_symbols(signals_path, data_dir, venue=venue_key, external_data_dir=external_data_dir)
     print(f"Found {len(symbols)} symbols with matching data")
 
     # Load per-symbol precision specs (Hyperliquid metadata)
@@ -100,10 +101,10 @@ def run_backtest(
         instruments[symbol] = instrument
         engine.add_instrument(instrument)
 
-        bar_type = BarType.from_str(f"{instrument.id}-1-HOUR-LAST-EXTERNAL")
+        bar_type = BarType.from_str(f"{instrument.id}-{bar_spec}-LAST-EXTERNAL")
         bar_types[symbol] = bar_type
 
-        bars = load_bars(instrument, bar_type, data_dir, venue=venue_key)
+        bars = load_bars(instrument, bar_type, data_dir, venue=venue_key, external_data_dir=external_data_dir)
         all_bars.extend(bars)
         print(f"  Loaded {len(bars)} bars")
 
@@ -141,23 +142,15 @@ def run_backtest(
     print(f"Daily positions CSV: {daily_snapshots_path}")
     print(f"Total daily snapshots: {len(strategy.daily_snapshots)}")
 
-    tearsheet_config = TearsheetConfig(
-        theme="plotly_dark",
-        height=1800,
-        show_logo=False,
-        layout=GridLayout(
-            rows=4,
-            cols=2,
-            heights=[0.40, 0.25, 0.20, 0.15],
-            vertical_spacing=0.08,
-            horizontal_spacing=0.08,
-        ),
-    )
+    tearsheet_config = TearsheetConfig(theme="plotly_dark")
     tearsheet_path = log_dir / f"tearsheet_{venue_key}_{timestamp}.html"
+    sample_instrument = next(iter(instruments.values()))
+    taker_fee_bps = float(sample_instrument.taker_fee) * 10_000
     title = (
-        f"{venue_name} Multi-Asset Strategy | "
+        f"JennyLauV6 | "
         f"Capital: ${start_capital:,.0f} | "
         f"Slippage: {fixed_slippage_bps} bps | "
+        f"Taker Fee: {taker_fee_bps:.1f} bps | "
         f"Reserve: {config.capital_reserve_pct*100:.0f}% | "
         f"Min Order: ${config.min_order_notional:.0f} | "
         f"Signal Offset: {config.signal_offset_days}d"
@@ -205,6 +198,18 @@ if __name__ == "__main__":
         default=None,
         help="Backtest start date in YYYY-MM-DD format (default: use all data)",
     )
+    parser.add_argument(
+        "--bar-spec",
+        type=str,
+        default="1-HOUR",
+        help="Bar spec string, e.g. '1-HOUR' or '1-MINUTE' (default: 1-HOUR)",
+    )
+    parser.add_argument(
+        "--external-data-dir",
+        type=Path,
+        default=None,
+        help="External data directory with {SYMBOL}USDT.parquet files",
+    )
     args = parser.parse_args()
 
     bt_start_date = None
@@ -217,4 +222,6 @@ if __name__ == "__main__":
         log_dir=args.log_dir,
         start_capital=args.capital,
         start_date=bt_start_date,
+        bar_spec=args.bar_spec,
+        external_data_dir=args.external_data_dir,
     )
