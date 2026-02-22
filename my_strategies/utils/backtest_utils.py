@@ -19,15 +19,15 @@ from nautilus_trader.persistence.wranglers import BarDataWrangler
 
 
 BINANCE = Venue("BINANCE")
-HYPERLIQUID = Venue("HYPERLIQUID")
 DATA_DIR = Path(__file__).parent.parent / "data"
+
+
+BINANCE_DATA_SUBDIR = "binance_1m_perps_20241201_20260213"
 
 
 def get_available_symbols(
     signals_path: Path,
     data_dir: Path | None = None,
-    venue: str = "binance",
-    external_data_dir: Path | None = None,
 ) -> list[str]:
     if data_dir is None:
         data_dir = DATA_DIR
@@ -36,22 +36,10 @@ def get_available_symbols(
     signal_symbols = set(signals_df["symbol"].unique())
 
     available = set()
-    if external_data_dir is not None:
-        # External data: files named {BASE}USDT.parquet (e.g. BTCUSDT.parquet)
-        for f in external_data_dir.glob("*.parquet"):
-            stem = f.stem
-            if stem.endswith("USDT"):
-                available.add(stem[:-4])
-    elif venue == "binance":
-        for f in (data_dir / "binance").glob("*.parquet"):
-            parts = f.stem.split("_")
-            if len(parts) >= 2 and parts[1].endswith("USDT"):
-                available.add(parts[1][:-4])
-    elif venue == "hyperliquid":
-        for f in (data_dir / "hyperliquid").glob("*.parquet"):
-            parts = f.stem.split("_")
-            if len(parts) >= 2:
-                available.add(parts[1])
+    for f in (data_dir / BINANCE_DATA_SUBDIR).glob("*.parquet"):
+        stem = f.stem  # e.g. "BTCUSDT"
+        if stem.endswith("USDT"):
+            available.add(stem[:-4])  # e.g. "BTC"
 
     return sorted(signal_symbols & available)
 
@@ -101,20 +89,11 @@ def load_bars(
     instrument: CryptoPerpetual,
     bar_type: BarType,
     data_dir: Path | None = None,
-    venue: str = "binance",
-    external_data_dir: Path | None = None,
 ) -> list[Bar]:
     if data_dir is None:
         data_dir = DATA_DIR
 
-    if external_data_dir is not None:
-        return _load_external_bars(instrument, bar_type, external_data_dir)
-    elif venue == "binance":
-        return _load_binance_bars(instrument, bar_type, data_dir)
-    elif venue == "hyperliquid":
-        return _load_hyperliquid_bars(instrument, bar_type, data_dir)
-    else:
-        raise ValueError(f"Unsupported venue: {venue}")
+    return _load_binance_bars(instrument, bar_type, data_dir)
 
 
 def _load_binance_bars(
@@ -122,72 +101,16 @@ def _load_binance_bars(
     bar_type: BarType,
     data_dir: Path,
 ) -> list[Bar]:
-    symbol = str(instrument.raw_symbol)
-    pattern = f"binance_{symbol}_1h_daily_*.parquet"
-    files = list((data_dir / "binance").glob(pattern))
-    if not files:
-        raise FileNotFoundError(f"No data file found for {symbol}")
-
-    df = pd.read_parquet(files[0])
-    df = df[["timestamp", "open", "high", "low", "close", "volume"]]
-    df[["open", "high", "low", "close", "volume"]] = df[
-        ["open", "high", "low", "close", "volume"]
-    ].astype(np.float64)
-    df = df.set_index("timestamp")
-
-    wrangler = BarDataWrangler(bar_type, instrument)
-    return wrangler.process(df)
-
-
-def _load_external_bars(
-    instrument: CryptoPerpetual,
-    bar_type: BarType,
-    external_data_dir: Path,
-) -> list[Bar]:
-    """Load bars from external data directory (files named {SYMBOL}USDT.parquet)."""
     symbol = str(instrument.raw_symbol)  # e.g. "BTCUSDT"
-    filepath = external_data_dir / f"{symbol}.parquet"
+    filepath = data_dir / BINANCE_DATA_SUBDIR / f"{symbol}.parquet"
     if not filepath.exists():
-        raise FileNotFoundError(f"No data file found: {filepath}")
+        raise FileNotFoundError(f"No data file found for {symbol}")
 
     df = pd.read_parquet(filepath)
     df = df[["timestamp", "open", "high", "low", "close", "volume"]]
     df[["open", "high", "low", "close", "volume"]] = df[
         ["open", "high", "low", "close", "volume"]
     ].astype(np.float64)
-    df = df.set_index("timestamp")
-
-    wrangler = BarDataWrangler(bar_type, instrument)
-    return wrangler.process(df)
-
-
-def _load_hyperliquid_bars(
-    instrument: CryptoPerpetual,
-    bar_type: BarType,
-    data_dir: Path,
-) -> list[Bar]:
-    # Extract base symbol (e.g., "BTC" from "BTCUSDT")
-    raw_symbol = str(instrument.raw_symbol)
-    base_symbol = raw_symbol.replace("USDT", "")
-
-    pattern = f"hyperliquid_{base_symbol}_*.parquet"
-    files = list((data_dir / "hyperliquid").glob(pattern))
-    if not files:
-        raise FileNotFoundError(f"No data file found for {base_symbol}")
-
-    df = pd.read_parquet(files[0])
-
-    # Hyperliquid has mid_px instead of OHLC, construct bars from it
-    # For hourly snapshots, open=high=low=close=mid_px
-    df = df.rename(columns={"time": "timestamp"})
-    df["open"] = df["mid_px"].astype(np.float64)
-    df["high"] = df["mid_px"].astype(np.float64)
-    df["low"] = df["mid_px"].astype(np.float64)
-    df["close"] = df["mid_px"].astype(np.float64)
-    # Use day_ntl_vlm as volume proxy (notional volume)
-    df["volume"] = df["day_ntl_vlm"].astype(np.float64)
-
-    df = df[["timestamp", "open", "high", "low", "close", "volume"]]
     df = df.set_index("timestamp")
 
     wrangler = BarDataWrangler(bar_type, instrument)
