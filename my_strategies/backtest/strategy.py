@@ -25,7 +25,7 @@ class MyStrategyConfig(StrategyConfig, frozen=True):
     ]  # signal symbol -> instrument symbol (e.g., "BTC" -> "BTCUSDT-PERP")
     capital_reserve_pct: float = 0.05  # 5% reserve, 95% capital in use
     min_order_notional: float = 10.0  # Minimum order value in USD
-    signal_offset_days: int = 2  # Fetch signals from N days ago
+    signal_offset_days: int = 1  # Fetch signals from N days ago
 
 
 class MyStrategy(Strategy):
@@ -36,7 +36,6 @@ class MyStrategy(Strategy):
         self.instrument_id_map: dict[str, InstrumentId] = {}
         self.signals_df: pd.DataFrame = None
         self.last_prices: dict[InstrumentId, float] = {}
-        # Daily position snapshots: list of dicts with date, positions, equity
         self.daily_snapshots: list[dict] = []
 
     def on_start(self):
@@ -98,6 +97,7 @@ class MyStrategy(Strategy):
         current_time = unix_nanos_to_dt(event.ts_event)
         current_date = current_time.date()
         signal_date = current_date - timedelta(days=self.config.signal_offset_days)
+        pre_rebalance_equity = self._get_total_equity()
         self.log.info(
             f"Rebalance triggered at {current_time.strftime('%Y-%m-%d %H:%M:%S')} UTC, "
             f"using signals from {signal_date}",
@@ -166,8 +166,8 @@ class MyStrategy(Strategy):
 
             self._submit_order(instrument_id, instrument, delta_qty)
 
-        # Record daily position snapshot AFTER rebalancing
-        self._record_daily_snapshot(current_date)
+        # Record positions after rebalancing, but use pre-rebalance equity
+        self._record_daily_snapshot(current_date, pre_rebalance_equity)
 
     def _get_weights_for_date(self, target_date) -> dict[str, float]:
         day_signals = self.signals_df[self.signals_df["date"] == target_date]
@@ -195,9 +195,9 @@ class MyStrategy(Strategy):
 
         return complete_weights
 
-    def _record_daily_snapshot(self, snapshot_date) -> None:
+    def _record_daily_snapshot(self, snapshot_date, equity: float) -> None:
         """Record current positions snapshot for daily analysis."""
-        total_equity = self._get_total_equity()
+        total_equity = equity
 
         positions_data = []
         for instrument_id in self.instruments:

@@ -6,12 +6,11 @@ from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
-from fill_model import FixedBpsSlippageFillModel
-from strategy import MyStrategy
-from strategy import MyStrategyConfig
-
 from my_analysis import TearsheetConfig
 from my_analysis import create_tearsheet
+from my_strategies.backtest.fill_model import FixedBpsSlippageFillModel
+from my_strategies.backtest.strategy import MyStrategy
+from my_strategies.backtest.strategy import MyStrategyConfig
 from my_strategies.utils import BINANCE
 from my_strategies.utils import HYPERLIQUID
 from my_strategies.utils import create_instrument
@@ -37,7 +36,7 @@ VENUE_CONFIGS = {
 DEFAULT_DATA_DIR = Path(__file__).parent.parent / "data"
 DEFAULT_LOG_DIR = Path(__file__).parent.parent / "logs"
 SIGNALS_PATH = (
-    DEFAULT_DATA_DIR / "signal" / "signals_2024-12-01_2026-02-13_20260213_015447.parquet"
+    DEFAULT_DATA_DIR / "signal" / "signals_2024-12-01_2026-02-21_20260221_125721.parquet"
 )
 
 def run_backtest(
