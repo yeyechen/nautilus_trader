@@ -1,5 +1,5 @@
+from datetime import UTC
 from datetime import datetime
-from datetime import timezone
 from pathlib import Path
 
 import pandas as pd
@@ -75,7 +75,7 @@ def fetch_signals_for_date_range(
                 output_path = Path(output_dir)
             output_path.mkdir(parents=True, exist_ok=True)
 
-            timestamp_str = datetime.now(timezone.utc).strftime(
+            timestamp_str = datetime.now(UTC).strftime(
                 "%Y%m%d_%H%M%S"
             )  # noqa: UP017
             filename = f"signals_{start_date}_{end_date}_{timestamp_str}.parquet"
@@ -92,7 +92,7 @@ def fetch_signals_for_date_range(
 
 if __name__ == "__main__":
     START_DATE = "2024-12-01"
-    END_DATE = "2026-02-13"
+    END_DATE = datetime.now(UTC).strftime("%Y-%m-%d")
 
     print("=" * 60)
     print("SIGNAL DATA FETCHER")

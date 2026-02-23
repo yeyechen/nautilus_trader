@@ -23,7 +23,7 @@ def get_unique_symbols(
             Path(__file__).parent.parent
             / "data"
             / "signal"
-            / "signals_2024-12-01_2026-02-13_20260213_015447.parquet"
+            / "signals_2024-12-01_2026-02-21_20260221_125721.parquet"
         )
     else:
         signal_file_path = Path(signal_file_path)

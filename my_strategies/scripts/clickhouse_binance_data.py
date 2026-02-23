@@ -1,3 +1,4 @@
+from datetime import UTC
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -172,7 +173,7 @@ if __name__ == "__main__":
     # Configuration
     INTERVAL = "1h"
     START_DATE = "2024-12-01"
-    END_DATE = "2026-02-13"
+    END_DATE = datetime.now(UTC).strftime("%Y-%m-%d")
 
     print("=" * 80)
     print("BINANCE KLINES DATA LOADER")

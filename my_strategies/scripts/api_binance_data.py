@@ -4,8 +4,9 @@ Fetch minute-level perpetual OHLCV data from Binance API for all signal-universe
 Usage:
     python -m my_strategies.scripts.api_binance_data
 """
-
 import time
+from datetime import UTC
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -17,7 +18,7 @@ from my_strategies.utils.data_fetching import get_unique_symbols
 
 # --- Configuration ---
 START_DATE = "2024-12-01"
-END_DATE = "2026-02-13"
+END_DATE = datetime.now(UTC).strftime("%Y-%m-%d")
 INTERVAL = "1m"
 OUTPUT_DIR = Path("/Volumes/MyBlackBox/binance_1m_perps_20241201_20260213")
 
