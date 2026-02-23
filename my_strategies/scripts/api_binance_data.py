@@ -13,7 +13,7 @@ import pandas as pd
 from binance.client import Client
 from binance.enums import HistoricalKlinesType
 
-from my_strategies.utils.data_fetching import get_unique_symbols
+from my_strategies.scripts.symbol_utils import get_unique_symbols
 
 
 # --- Configuration ---

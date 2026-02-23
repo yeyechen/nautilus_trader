@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 from my_strategies.database.database_config import get_signal_db_config
 from my_strategies.database.database_connection import ClickHouseConnection
-from my_strategies.utils.data_fetching import get_unique_symbols
+from my_strategies.scripts.symbol_utils import get_unique_symbols
 
 
 # Load environment variables from .env file in project root

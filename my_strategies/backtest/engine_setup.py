@@ -1,6 +1,7 @@
 """Shared backtest engine setup, data loading, and reporting utilities."""
 
 import argparse
+import json
 from datetime import UTC
 from datetime import datetime
 from decimal import Decimal
@@ -10,10 +11,9 @@ from my_strategies.analysis import TearsheetConfig
 from my_strategies.analysis import create_tearsheet
 from my_strategies.models.fill_model import FixedBpsSlippageFillModel
 from my_strategies.utils import BINANCE
-from my_strategies.utils import create_instrument
 from my_strategies.utils import get_available_symbols
-from my_strategies.utils import load_bars
-from my_strategies.utils import load_hyperliquid_instrument_specs
+from my_strategies.utils import load_all_bars
+from my_strategies.utils import load_daily_bars
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.config import BacktestEngineConfig
 from nautilus_trader.config import LoggingConfig
@@ -22,14 +22,95 @@ from nautilus_trader.model.currencies import USDT
 from nautilus_trader.model.data import BarType
 from nautilus_trader.model.enums import AccountType
 from nautilus_trader.model.enums import OmsType
+from nautilus_trader.model.identifiers import InstrumentId
+from nautilus_trader.model.identifiers import Symbol
+from nautilus_trader.model.identifiers import Venue
+from nautilus_trader.model.instruments import CryptoPerpetual
+from nautilus_trader.model.objects import Currency
 from nautilus_trader.model.objects import Money
+from nautilus_trader.model.objects import Price
+from nautilus_trader.model.objects import Quantity
 
 
-DEFAULT_DATA_DIR = Path("/home/ra_yeye/2026_projects/data")
+DEFAULT_DATA_DIR = Path(__file__).parent.parent / "data"
 DEFAULT_LOG_DIR = Path(__file__).parent.parent / "logs"
 SIGNALS_PATH = (
     DEFAULT_DATA_DIR / "signal" / "signals_2024-12-01_2026-02-21_20260221_125721.parquet"
 )
+
+
+HYPERLIQUID_PX_MAX_DECIMALS = 6
+
+
+def create_instrument(
+    base_symbol: str,
+    venue: Venue | None = None,
+    price_precision: int = 2,
+    size_precision: int = 8,
+    maker_fee: Decimal = Decimal("0.00015"),  # Tier 0 maker fee in hyperliquid
+    taker_fee: Decimal = Decimal("0.00045"),  # Tier 0 taker fee in hyperliquid
+) -> CryptoPerpetual:
+    if venue is None:
+        venue = BINANCE
+
+    price_increment = Price(10 ** -price_precision, price_precision)
+    size_increment = Quantity(10 ** -size_precision, size_precision)
+
+    base_currency = Currency.from_str(base_symbol)
+    return CryptoPerpetual(
+        instrument_id=InstrumentId(Symbol(f"{base_symbol}USDT-PERP"), venue),
+        raw_symbol=Symbol(f"{base_symbol}USDT"),
+        base_currency=base_currency,
+        quote_currency=USDT,
+        settlement_currency=USDT,
+        is_inverse=False,
+        price_precision=price_precision,
+        price_increment=price_increment,
+        size_precision=size_precision,
+        size_increment=size_increment,
+        max_quantity=None,
+        min_quantity=None,
+        max_notional=None,
+        min_notional=None,
+        max_price=Price.from_str("1000000.00"),
+        min_price=price_increment,
+        margin_init=Decimal("0.05"),
+        margin_maint=Decimal("0.025"),
+        maker_fee=maker_fee,
+        taker_fee=taker_fee,
+        ts_event=0,
+        ts_init=0,
+    )
+
+
+def load_hyperliquid_instrument_specs(
+    meta_path: Path | None = None,
+) -> dict[str, dict]:
+    """
+    Load per-symbol size/price precision from Hyperliquid metadata JSON.
+
+    Returns a dict keyed by symbol (e.g. "BTC") with keys:
+        size_precision, price_precision
+    """
+    if meta_path is None:
+        meta_path = (
+            Path(__file__).parent.parent / "data" / "hyperliquid_meta_and_ctx" / "full_meta_and_ctx_20260109.json"
+        )
+
+    with open(meta_path) as f:
+        raw = json.load(f)
+
+    meta = raw[0]  # [meta_dict, ctxs_list]
+    specs: dict[str, dict] = {}
+    for asset in meta["universe"]:
+        symbol = asset["name"]
+        sz_decimals = int(asset["szDecimals"])
+        px_decimals = max(0, HYPERLIQUID_PX_MAX_DECIMALS - sz_decimals)
+        specs[symbol] = {
+            "size_precision": sz_decimals,
+            "price_precision": px_decimals,
+        }
+    return specs
 
 
 def create_engine(
@@ -66,12 +147,13 @@ def create_engine(
     return engine, timestamp
 
 
-def load_instruments_and_bars(
+def load_instruments(
     engine: BacktestEngine,
     signals_path: Path,
     data_dir: Path,
     bar_spec: str,
 ) -> tuple[dict, dict]:
+    """Create instruments and bar_types, add instruments to engine. No bar data loaded."""
     symbols = get_available_symbols(signals_path, data_dir)
     print(f"Found {len(symbols)} symbols with matching data")
 
@@ -79,10 +161,8 @@ def load_instruments_and_bars(
 
     instruments = {}
     bar_types = {}
-    all_bars = []
 
     for symbol in symbols:
-        print(f"Loading {symbol}...")
         spec = instrument_specs.get(symbol, {})
         instrument = create_instrument(
             base_symbol=symbol,
@@ -96,13 +176,26 @@ def load_instruments_and_bars(
         bar_type = BarType.from_str(f"{instrument.id}-{bar_spec}-LAST-EXTERNAL")
         bar_types[symbol] = bar_type
 
-        bars = load_bars(instrument, bar_type, data_dir)
+    return instruments, bar_types
+
+
+def load_bar_data(
+    engine: BacktestEngine,
+    instruments: dict,
+    bar_types: dict,
+    data_dir: Path,
+    loader_fn=load_all_bars,
+) -> None:
+    """Load bar data for all instruments using the given loader function."""
+    all_bars = []
+    for symbol, instrument in instruments.items():
+        print(f"Loading {symbol}...")
+        bar_type = bar_types[symbol]
+        bars = loader_fn(instrument, bar_type, data_dir)
         all_bars.extend(bars)
         print(f"  Loaded {len(bars)} bars")
 
     engine.add_data(all_bars)
-
-    return instruments, bar_types
 
 
 def print_results(engine: BacktestEngine, log_dir: Path, timestamp: str) -> None:

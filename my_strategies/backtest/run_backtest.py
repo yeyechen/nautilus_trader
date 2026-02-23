@@ -9,11 +9,13 @@ from my_strategies.backtest.engine_setup import SIGNALS_PATH
 from my_strategies.backtest.engine_setup import add_common_args
 from my_strategies.backtest.engine_setup import create_engine
 from my_strategies.backtest.engine_setup import generate_reports
-from my_strategies.backtest.engine_setup import load_instruments_and_bars
+from my_strategies.backtest.engine_setup import load_bar_data
+from my_strategies.backtest.engine_setup import load_instruments
 from my_strategies.backtest.engine_setup import parse_start_date
 from my_strategies.backtest.engine_setup import print_results
 from my_strategies.strategies.strategy import MyStrategy
 from my_strategies.strategies.strategy import MyStrategyConfig
+from my_strategies.utils import load_daily_bars
 
 
 def run_backtest(
@@ -27,9 +29,8 @@ def run_backtest(
 ) -> None:
     engine, timestamp = create_engine(log_dir, "backtest", start_capital, fixed_slippage_bps)
 
-    instruments, bar_types = load_instruments_and_bars(
-        engine, signals_path, data_dir, bar_spec,
-    )
+    instruments, bar_types = load_instruments(engine, signals_path, data_dir, bar_spec)
+    load_bar_data(engine, instruments, bar_types, data_dir, loader_fn=load_daily_bars)
 
     symbol_mapping = {sym: f"{sym}USDT-PERP" for sym in instruments}
     config = MyStrategyConfig(
