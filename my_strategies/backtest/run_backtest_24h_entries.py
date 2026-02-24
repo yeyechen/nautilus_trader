@@ -73,11 +73,12 @@ if __name__ == "__main__":
     add_common_args(parser)
     args = parser.parse_args()
 
-    run_backtest(
-        data_dir=args.data_dir,
-        log_dir=args.log_dir,
-        start_capital=args.capital,
-        start_date=parse_start_date(args.start_date),
-        bar_spec=args.bar_spec,
-        rebalance_hour=args.rebalance_hour,
-    )
+    for rebalance_hour in range(24):
+        run_backtest(
+            data_dir=args.data_dir,
+            log_dir=args.log_dir,
+            start_capital=args.capital,
+            start_date=parse_start_date(args.start_date),
+            bar_spec=args.bar_spec,
+            rebalance_hour=rebalance_hour,
+        )
