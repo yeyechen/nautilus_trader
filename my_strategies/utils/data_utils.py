@@ -39,7 +39,7 @@ def get_available_symbols(
     return sorted(signal_symbols & available)
 
 
-def load_all_bars(
+def load_bars_all(
     instrument: CryptoPerpetual,
     bar_type: BarType,
     data_dir: Path | None = None,
@@ -61,10 +61,27 @@ def _load_binance_bars(
     return wrangler.process(df)
 
 
+def load_bars_daily(
+    instrument: CryptoPerpetual,
+    bar_type: BarType,
+    data_dir: Path | None = None,
+    hour: int = 0,
+) -> list[Bar]:
+    """Lazy load bars at the rebalance hour only."""
+    if data_dir is None:
+        data_dir = DATA_DIR
+
+    df = _read_binance_parquet(instrument, data_dir)
+    df = df[(df.index.hour == hour) & (df.index.minute == 0)]
+
+    wrangler = BarDataWrangler(bar_type, instrument)
+    return wrangler.process(df)
+
+
 FUNDING_HOURS = {0, 8, 16}  # Binance funding settlement times (UTC)
 
 
-def load_daily_bars(
+def load_bars_eight_hourly(
     instrument: CryptoPerpetual,
     bar_type: BarType,
     data_dir: Path | None = None,
@@ -77,9 +94,7 @@ def load_daily_bars(
     hours = FUNDING_HOURS | {hour}
 
     df = _read_binance_parquet(instrument, data_dir)
-    df = df[
-        df.index.hour.isin(hours) & (df.index.minute == 0)
-    ]
+    df = df[df.index.hour.isin(hours) & (df.index.minute == 0)]
 
     wrangler = BarDataWrangler(bar_type, instrument)
     return wrangler.process(df)

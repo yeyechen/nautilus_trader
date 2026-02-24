@@ -4,7 +4,7 @@ from datetime import timezone
 from .signal_handler_config import SignalHandlerConfig
 
 
-class SignalHandler:
+class SignalHandlerV2:
 
     def __init__(self, config: SignalHandlerConfig):
         from my_strategies.database import ClickHouseConnection
@@ -22,7 +22,7 @@ class SignalHandler:
         return {row[0]: row[1] for row in result} if result else None
 
     def _build_weights_query(self, target_date: datetime) -> tuple[str, dict]:
-        target_date_str = target_date.strftime("%Y-%m-%d")
+        target_date_str = target_date.strftime("%Y-%m-%d %H:%M:%S")
         table = f"{self._signal_database_name}.{self._signal_table_name}"
         # Table name is from config (trusted source), user input is parameterized
         query = f"""
@@ -32,15 +32,15 @@ class SignalHandler:
             FROM {table}
             WHERE weight IS NOT NULL
             AND NOT isNaN(toFloat64(weight))
-            AND toDate(date) = toDate(%(target_date)s)
+            AND toDate(timestamp) = toDate(%(target_date)s)
             AND inserted_at = (
                 SELECT max(inserted_at)
                 FROM {table}
                 WHERE weight IS NOT NULL
                 AND NOT isNaN(toFloat64(weight))
-                AND toDate(date) = toDate(%(target_date)s)
+                AND toDate(timestamp) = toDate(%(target_date)s)
             )
-            LIMIT 1 BY date, symbol
+            LIMIT 1 BY timestamp, symbol
         """  # noqa: S608
         return query, {"target_date": target_date_str}
 

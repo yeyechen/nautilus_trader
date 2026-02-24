@@ -12,7 +12,7 @@ from my_strategies.analysis import create_tearsheet
 from my_strategies.models.fill_model import FixedBpsSlippageFillModel
 from my_strategies.utils import BINANCE
 from my_strategies.utils import get_available_symbols
-from my_strategies.utils import load_all_bars
+from my_strategies.utils import load_bars_all
 from my_strategies.utils import load_funding_rates
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.config import BacktestEngineConfig
@@ -34,9 +34,10 @@ from nautilus_trader.model.objects import Quantity
 
 DEFAULT_DATA_DIR = Path(__file__).parent.parent / "data"
 DEFAULT_LOG_DIR = Path(__file__).parent.parent / "logs"
-SIGNALS_PATH = (
-    DEFAULT_DATA_DIR / "signal" / "signals_2024-12-01_2026-02-21_20260221_125721.parquet"
-)
+SIGNALS_JENNY_V6 = DEFAULT_DATA_DIR / "signals" / "signals_2024-12-01_2026-02-21_20260221_125721.parquet"
+SIGNALS_MAICRO_V2 = DEFAULT_DATA_DIR / "signals" / "signals_v2_2024-12-01_2026-02-24_20260224_041123.parquet"
+
+SIGNALS_PATH = SIGNALS_MAICRO_V2
 
 
 HYPERLIQUID_PX_MAX_DECIMALS = 6
@@ -184,7 +185,7 @@ def load_bar_data(
     instruments: dict,
     bar_types: dict,
     data_dir: Path,
-    loader_fn=load_all_bars,
+    loader_fn=load_bars_all,
 ) -> None:
     """Load bar data for all instruments using the given loader function."""
     all_bars = []

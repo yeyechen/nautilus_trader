@@ -101,20 +101,8 @@ class MyStrategy(Strategy):
         self.last_prices[bar.bar_type.instrument_id] = float(bar.open)
 
     def on_funding_rate(self, funding_rate: FundingRateUpdate) -> None:
-        instrument_id = funding_rate.instrument_id
-        position = self.portfolio.net_position(instrument_id)
-        if not position or float(position) == 0.0:
-            return
-
-        mark_price = self.config.funding_mark_prices.get(funding_rate.ts_event)
-        if mark_price is None or mark_price <= 0:
-            return
-
-        position_qty = float(position)
-        rate = float(funding_rate.rate)
-        # Long + positive rate = you pay; short + positive rate = you receive
-        cost = position_qty * mark_price * rate
-        self.cumulative_funding_cost += cost
+        # skip funding rate cost for now
+        pass
 
     def on_rebalance(self, event: TimeEvent):
         current_time = unix_nanos_to_dt(event.ts_event)

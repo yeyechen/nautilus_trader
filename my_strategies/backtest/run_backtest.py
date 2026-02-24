@@ -11,13 +11,12 @@ from my_strategies.backtest.engine_setup import add_common_args
 from my_strategies.backtest.engine_setup import create_engine
 from my_strategies.backtest.engine_setup import generate_reports
 from my_strategies.backtest.engine_setup import load_bar_data
-from my_strategies.backtest.engine_setup import load_funding_data
 from my_strategies.backtest.engine_setup import load_instruments
 from my_strategies.backtest.engine_setup import parse_start_date
 from my_strategies.backtest.engine_setup import print_results
 from my_strategies.strategies.strategy import MyStrategy
 from my_strategies.strategies.strategy import MyStrategyConfig
-from my_strategies.utils import load_daily_bars
+from my_strategies.utils import load_bars_daily
 
 
 def run_backtest(
@@ -33,8 +32,7 @@ def run_backtest(
     engine, timestamp = create_engine(log_dir, "backtest", start_capital, fixed_slippage_bps)
 
     instruments, bar_types = load_instruments(engine, signals_path, data_dir, bar_spec)
-    load_bar_data(engine, instruments, bar_types, data_dir, loader_fn=partial(load_daily_bars, hour=rebalance_hour))
-    funding_mark_prices = load_funding_data(engine, instruments, data_dir)
+    load_bar_data(engine, instruments, bar_types, data_dir, loader_fn=partial(load_bars_daily, hour=rebalance_hour))
 
     symbol_mapping = {sym: f"{sym}USDT-PERP" for sym in instruments}
     config = MyStrategyConfig(
@@ -43,7 +41,6 @@ def run_backtest(
         signals_path=str(signals_path),
         symbol_mapping=symbol_mapping,
         rebalance_hour=rebalance_hour,
-        funding_mark_prices=funding_mark_prices,
     )
     strategy = MyStrategy(config=config)
     engine.add_strategy(strategy)
@@ -56,7 +53,7 @@ def run_backtest(
     sample_instrument = next(iter(instruments.values()))
     taker_fee_bps = float(sample_instrument.taker_fee) * 10_000
     title = (
-        f"JennyLauV6 | "
+        f"Maicro_v2 | "
         f"Slippage: {fixed_slippage_bps} bps | "
         f"Taker Fee: {taker_fee_bps:.1f} bps | "
         f"Reserve: {config.capital_reserve_pct*100:.0f}% | "

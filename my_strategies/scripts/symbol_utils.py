@@ -2,6 +2,11 @@ from pathlib import Path
 
 import pandas as pd
 
+_DATA_DIR = Path(__file__).parent.parent / "data" / "signals"
+
+SIGNAL_FILE_PATH = _DATA_DIR / "signals_2024-12-01_2026-02-21_20260221_125721.parquet"
+SIGNAL_V2_FILE_PATH = _DATA_DIR / "signals_v2_2024-12-01_2026-02-24_20260224_041123.parquet"
+
 
 def get_unique_symbols(
     signal_file_path: str | Path | None = None,
@@ -18,13 +23,7 @@ def get_unique_symbols(
         List of unique symbols sorted alphabetically with quote currency appended.
     """
     if signal_file_path is None:
-        # Use default signal file path
-        signal_file_path = (
-            Path(__file__).parent.parent
-            / "data"
-            / "signal"
-            / "signals_2024-12-01_2026-02-21_20260221_125721.parquet"
-        )
+        signal_file_path = SIGNAL_FILE_PATH
     else:
         signal_file_path = Path(signal_file_path)
 

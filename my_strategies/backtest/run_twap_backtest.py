@@ -16,7 +16,7 @@ from my_strategies.backtest.engine_setup import parse_start_date
 from my_strategies.backtest.engine_setup import print_results
 from my_strategies.strategies.twap_strategy import MyTWAPStrategy
 from my_strategies.strategies.twap_strategy import MyTWAPStrategyConfig
-from my_strategies.utils import load_all_bars
+from my_strategies.utils import load_bars_all
 from nautilus_trader.examples.algorithms.twap import TWAPExecAlgorithm
 
 
@@ -33,7 +33,7 @@ def run_twap_backtest(
     engine, timestamp = create_engine(log_dir, "backtest_twap", start_capital, fixed_slippage_bps)
 
     instruments, bar_types = load_instruments(engine, signals_path, data_dir, bar_spec)
-    load_bar_data(engine, instruments, bar_types, data_dir, loader_fn=load_all_bars)
+    load_bar_data(engine, instruments, bar_types, data_dir, loader_fn=load_bars_all)
     funding_mark_prices = load_funding_data(engine, instruments, data_dir)
 
     symbol_mapping = {sym: f"{sym}USDT-PERP" for sym in instruments}
