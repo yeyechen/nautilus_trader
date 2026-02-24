@@ -10,12 +10,13 @@ from my_strategies.backtest.engine_setup import add_common_args
 from my_strategies.backtest.engine_setup import create_engine
 from my_strategies.backtest.engine_setup import generate_reports
 from my_strategies.backtest.engine_setup import load_bar_data
+from my_strategies.backtest.engine_setup import load_funding_data
 from my_strategies.backtest.engine_setup import load_instruments
 from my_strategies.backtest.engine_setup import parse_start_date
 from my_strategies.backtest.engine_setup import print_results
-from my_strategies.utils import load_all_bars
 from my_strategies.strategies.twap_strategy import MyTWAPStrategy
 from my_strategies.strategies.twap_strategy import MyTWAPStrategyConfig
+from my_strategies.utils import load_all_bars
 from nautilus_trader.examples.algorithms.twap import TWAPExecAlgorithm
 
 
@@ -27,11 +28,13 @@ def run_twap_backtest(
     fixed_slippage_bps: float = 5.0,
     start_date=None,
     bar_spec: str = "1-MINUTE",
+    rebalance_hour: int = 0,
 ) -> None:
     engine, timestamp = create_engine(log_dir, "backtest_twap", start_capital, fixed_slippage_bps)
 
     instruments, bar_types = load_instruments(engine, signals_path, data_dir, bar_spec)
     load_bar_data(engine, instruments, bar_types, data_dir, loader_fn=load_all_bars)
+    funding_mark_prices = load_funding_data(engine, instruments, data_dir)
 
     symbol_mapping = {sym: f"{sym}USDT-PERP" for sym in instruments}
     config = MyTWAPStrategyConfig(
@@ -39,6 +42,8 @@ def run_twap_backtest(
         bar_types=tuple(bar_types.values()),
         signals_path=str(signals_path),
         symbol_mapping=symbol_mapping,
+        rebalance_hour=rebalance_hour,
+        funding_mark_prices=funding_mark_prices,
     )
     strategy = MyTWAPStrategy(config=config)
     engine.add_strategy(strategy)
@@ -53,12 +58,12 @@ def run_twap_backtest(
     taker_fee_bps = float(sample_instrument.taker_fee) * 10_000
     title = (
         f"JennyLauV6 TWAP | "
-        f"Capital: ${start_capital:,.0f} | "
         f"Slippage: {fixed_slippage_bps} bps | "
         f"Taker Fee: {taker_fee_bps:.1f} bps | "
         f"Reserve: {config.capital_reserve_pct*100:.0f}% | "
         f"Min Order: ${config.min_order_notional:.0f} | "
         f"Signal Offset: {config.signal_offset_days}d | "
+        f"Rebalance: {config.rebalance_hour:02d}:00 UTC | "
         f"TWAP: {config.twap_horizon_secs / 60:.0f}min horizon, "
         f"{config.twap_interval_secs:.0f}s interval"
     )
@@ -78,4 +83,5 @@ if __name__ == "__main__":
         start_capital=args.capital,
         start_date=parse_start_date(args.start_date),
         bar_spec=args.bar_spec,
+        rebalance_hour=args.rebalance_hour,
     )

@@ -459,6 +459,7 @@ def create_tearsheet(  # noqa: C901
     config=None,
     benchmark_returns: pd.Series | None = None,
     benchmark_name: str = "Benchmark",
+    cumulative_funding_cost: float = 0.0,
 ) -> str | None:
     """
     Generate an interactive HTML tearsheet from backtest results.
@@ -480,6 +481,8 @@ def create_tearsheet(  # noqa: C901
         on visualizations.
     benchmark_name : str, default "Benchmark"
         Display name for the benchmark.
+    cumulative_funding_cost : float, default 0.0
+        Total funding cost accumulated during the backtest.
 
     Returns
     -------
@@ -528,6 +531,9 @@ def create_tearsheet(  # noqa: C901
     commission_totals = _compute_total_commission(engine)
     for cur, total in commission_totals.items():
         stats_general[f"Total Commission ({cur})"] = total
+
+    if cumulative_funding_cost != 0.0:
+        stats_general["Total Funding Cost (USDT)"] = cumulative_funding_cost
 
     # Build title with strategy name(s) and run time
     if title == "NautilusTrader Backtest Results":

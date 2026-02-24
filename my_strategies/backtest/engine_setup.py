@@ -13,7 +13,7 @@ from my_strategies.models.fill_model import FixedBpsSlippageFillModel
 from my_strategies.utils import BINANCE
 from my_strategies.utils import get_available_symbols
 from my_strategies.utils import load_all_bars
-from my_strategies.utils import load_daily_bars
+from my_strategies.utils import load_funding_rates
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.config import BacktestEngineConfig
 from nautilus_trader.config import LoggingConfig
@@ -198,6 +198,31 @@ def load_bar_data(
     engine.add_data(all_bars)
 
 
+def load_funding_data(
+    engine: BacktestEngine,
+    instruments: dict,
+    data_dir: Path,
+) -> dict[int, float]:
+    """Load funding rate data for all instruments. Returns mark prices keyed by ts_event nanos."""
+    all_updates = []
+    all_mark_prices: dict[int, float] = {}
+
+    for symbol, instrument in instruments.items():
+        updates, mark_prices = load_funding_rates(instrument, data_dir)
+        if updates:
+            all_updates.extend(updates)
+            all_mark_prices.update(mark_prices)
+            print(f"  {symbol}: {len(updates)} funding rate records")
+
+    if all_updates:
+        engine.add_data(all_updates)
+        print(f"Loaded {len(all_updates)} total funding rate records")
+    else:
+        print("No funding rate data found")
+
+    return all_mark_prices
+
+
 def print_results(engine: BacktestEngine, log_dir: Path, timestamp: str) -> None:
     print("\n" + "=" * 60)
     print("RESULTS")
@@ -227,11 +252,13 @@ def generate_reports(
 
     tearsheet_config = TearsheetConfig(theme="plotly_dark")
     tearsheet_path = log_dir / f"tearsheet_{timestamp}.html"
+    funding_cost = getattr(strategy, "cumulative_funding_cost", 0.0)
     create_tearsheet(
         engine,
         output_path=str(tearsheet_path),
         title=title,
         config=tearsheet_config,
+        cumulative_funding_cost=funding_cost,
     )
     print(f"Tearsheet written to: {tearsheet_path}")
 
@@ -266,6 +293,12 @@ def add_common_args(parser: argparse.ArgumentParser, default_bar_spec: str = "1-
         type=str,
         default=default_bar_spec,
         help=f"Bar spec string, e.g. '1-HOUR' or '1-MINUTE' (default: {default_bar_spec})",
+    )
+    parser.add_argument(
+        "--rebalance-hour",
+        type=int,
+        default=0,
+        help="Hour of day (0-23 UTC) to rebalance (default: 0)",
     )
 
 

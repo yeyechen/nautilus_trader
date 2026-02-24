@@ -9,6 +9,7 @@ from nautilus_trader.config import StrategyConfig
 from nautilus_trader.core.datetime import unix_nanos_to_dt
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import BarType
+from nautilus_trader.model.data import FundingRateUpdate
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.identifiers import InstrumentId
@@ -26,6 +27,8 @@ class MyStrategyConfig(StrategyConfig, frozen=True):
     capital_reserve_pct: float = 0.05  # 5% reserve, 95% capital in use
     min_order_notional: float = 10.0  # Minimum order value in USD
     signal_offset_days: int = 1  # Fetch signals from N days ago
+    rebalance_hour: int = 0  # 0-23, hour of day (UTC) to rebalance
+    funding_mark_prices: dict[int, float] = {}  # ts_event nanos -> mark price
 
 
 class MyStrategy(Strategy):
@@ -37,6 +40,7 @@ class MyStrategy(Strategy):
         self.signals_df: pd.DataFrame = None
         self.last_prices: dict[InstrumentId, float] = {}
         self.daily_snapshots: list[dict] = []
+        self.cumulative_funding_cost: float = 0.0
 
     def on_start(self):
         self.signals_df = pd.read_parquet(self.config.signals_path)
@@ -60,6 +64,9 @@ class MyStrategy(Strategy):
         for bar_type in self.config.bar_types:
             self.subscribe_bars(bar_type)
 
+        for instrument_id in self.config.instrument_ids:
+            self.subscribe_funding_rates(instrument_id)
+
         first_rebalance = self._get_first_rebalance_time()
         self.clock.set_timer(
             name="daily_rebalance",
@@ -73,25 +80,41 @@ class MyStrategy(Strategy):
         )
 
     def _get_total_equity(self) -> float:
-        """Return total equity including unrealized PnL (matches live account_value)."""
+        """Return total equity including unrealized PnL, minus cumulative funding costs."""
         venue = self.config.instrument_ids[0].venue
         account = self.portfolio.account(venue)
         balance = float(account.balance_total().as_double()) if account else 0.0
         unrealized_pnls = self.portfolio.unrealized_pnls(venue)
         if unrealized_pnls:
             balance += sum(float(pnl.as_double()) for pnl in unrealized_pnls.values())
-        return balance
+        return balance - self.cumulative_funding_cost
 
     def _get_first_rebalance_time(self) -> pd.Timestamp:
         now = self.clock.utc_now()
-        today_midnight = now.normalize()
-        if now <= today_midnight:
-            return today_midnight
-        return today_midnight + pd.Timedelta(days=1)
+        today_target = now.normalize() + pd.Timedelta(hours=self.config.rebalance_hour)
+        if now <= today_target:
+            return today_target
+        return today_target + pd.Timedelta(days=1)
 
     def on_bar(self, bar: Bar):
         # Use bar.open (price at bar start) to match 00:00 UTC rebalance time
         self.last_prices[bar.bar_type.instrument_id] = float(bar.open)
+
+    def on_funding_rate(self, funding_rate: FundingRateUpdate) -> None:
+        instrument_id = funding_rate.instrument_id
+        position = self.portfolio.net_position(instrument_id)
+        if not position or float(position) == 0.0:
+            return
+
+        mark_price = self.config.funding_mark_prices.get(funding_rate.ts_event)
+        if mark_price is None or mark_price <= 0:
+            return
+
+        position_qty = float(position)
+        rate = float(funding_rate.rate)
+        # Long + positive rate = you pay; short + positive rate = you receive
+        cost = position_qty * mark_price * rate
+        self.cumulative_funding_cost += cost
 
     def on_rebalance(self, event: TimeEvent):
         current_time = unix_nanos_to_dt(event.ts_event)
@@ -225,6 +248,7 @@ class MyStrategy(Strategy):
         self.daily_snapshots.append({
             "date": snapshot_date,
             "equity": total_equity,
+            "cumulative_funding_cost": self.cumulative_funding_cost,
             "num_positions": len(positions_data),
             "positions": positions_data,
         })
@@ -235,10 +259,12 @@ class MyStrategy(Strategy):
         for snapshot in self.daily_snapshots:
             date = snapshot["date"]
             equity = snapshot["equity"]
+            cumulative_funding = snapshot.get("cumulative_funding_cost", 0.0)
             for pos in snapshot["positions"]:
                 rows.append({
                     "date": date,
                     "equity": equity,
+                    "cumulative_funding_cost": cumulative_funding,
                     "symbol": pos["symbol"],
                     "instrument_id": pos["instrument_id"],
                     "side": pos["side"],
@@ -283,6 +309,7 @@ class MyStrategy(Strategy):
         self.signals_df = None
         self.last_prices.clear()
         self.daily_snapshots.clear()
+        self.cumulative_funding_cost = 0.0
 
     def on_dispose(self) -> None:
         self.signals_df = None

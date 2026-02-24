@@ -1,3 +1,4 @@
+from decimal import Decimal
 from pathlib import Path
 
 import numpy as np
@@ -5,6 +6,7 @@ import pandas as pd
 
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import BarType
+from nautilus_trader.model.data import FundingRateUpdate
 from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.instruments import CryptoPerpetual
 from nautilus_trader.persistence.wranglers import BarDataWrangler
@@ -15,6 +17,7 @@ DATA_DIR = Path(__file__).parent.parent / "data"
 
 
 BINANCE_DATA_SUBDIR = "binance_1m_perps_20241201_20260213"
+BINANCE_FUNDING_SUBDIR = "binance_funding_rates"
 
 
 def get_available_symbols(
@@ -58,22 +61,62 @@ def _load_binance_bars(
     return wrangler.process(df)
 
 
+FUNDING_HOURS = {0, 8, 16}  # Binance funding settlement times (UTC)
+
+
 def load_daily_bars(
     instrument: CryptoPerpetual,
     bar_type: BarType,
     data_dir: Path | None = None,
+    hour: int = 0,
 ) -> list[Bar]:
-    """Load only the midnight (00:00 UTC) bar for each day per symbol."""
+    """Load bars at the rebalance hour and at each funding settlement hour (0, 8, 16 UTC)."""
     if data_dir is None:
         data_dir = DATA_DIR
 
+    hours = FUNDING_HOURS | {hour}
+
     df = _read_binance_parquet(instrument, data_dir)
     df = df[
-        (df.index.hour == 0) & (df.index.minute == 0)
+        df.index.hour.isin(hours) & (df.index.minute == 0)
     ]
 
     wrangler = BarDataWrangler(bar_type, instrument)
     return wrangler.process(df)
+
+
+def load_funding_rates(
+    instrument: CryptoPerpetual,
+    data_dir: Path | None = None,
+) -> tuple[list[FundingRateUpdate], dict[int, float]]:
+    """Load funding rate data for a symbol and return (updates, mark_prices_by_ts_nanos)."""
+    if data_dir is None:
+        data_dir = DATA_DIR
+
+    symbol = str(instrument.raw_symbol)  # e.g. "BTCUSDT"
+    filepath = data_dir / BINANCE_FUNDING_SUBDIR / f"{symbol}.parquet"
+    if not filepath.exists():
+        return [], {}
+
+    df = pd.read_parquet(filepath)
+    updates = []
+    mark_prices = {}
+
+    for _, row in df.iterrows():
+        ts_nanos = int(row["timestamp"].value)  # pandas Timestamp -> nanoseconds
+        rate = Decimal(str(row["funding_rate"]))
+        mark_price = float(row["mark_price"])
+
+        update = FundingRateUpdate(
+            instrument_id=instrument.id,
+            rate=rate,
+            ts_event=ts_nanos,
+            ts_init=ts_nanos,
+        )
+        updates.append(update)
+        mark_prices[ts_nanos] = mark_price
+
+    return updates, mark_prices
 
 
 def _read_binance_parquet(
