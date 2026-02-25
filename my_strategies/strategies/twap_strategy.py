@@ -9,7 +9,6 @@ from nautilus_trader.config import StrategyConfig
 from nautilus_trader.core.datetime import unix_nanos_to_dt
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import BarType
-from nautilus_trader.model.data import FundingRateUpdate
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.identifiers import ExecAlgorithmId
@@ -29,7 +28,6 @@ class MyTWAPStrategyConfig(StrategyConfig, frozen=True):
     min_order_notional: float = 10.0  # Minimum order value in USD
     signal_offset_days: int = 2  # Fetch signals from N days ago
     rebalance_hour: int = 0  # 0-23, hour of day (UTC) to rebalance
-    funding_mark_prices: dict[int, float] = {}  # ts_event nanos -> mark price
     twap_horizon_secs: float = 1800.0  # 30 minutes
     twap_interval_secs: float = 60.0  # 1 minute (matches 1m bar resolution)
 
@@ -44,13 +42,15 @@ class MyTWAPStrategy(Strategy):
         self.last_prices: dict[InstrumentId, float] = {}
         # Daily position snapshots: list of dicts with date, positions, equity
         self.daily_snapshots: list[dict] = []
-        self.cumulative_funding_cost: float = 0.0
         # TWAP execution config
         self.twap_exec_algorithm_id = ExecAlgorithmId("TWAP")
         self.twap_exec_algorithm_params = {
             "horizon_secs": config.twap_horizon_secs,
             "interval_secs": config.twap_interval_secs,
         }
+        # Volume-scaled fill model support (set externally before engine.run)
+        self.fill_model = None
+        self.quote_volumes: dict[InstrumentId, dict[int, float]] = {}
 
     def on_start(self):
         self.signals_df = pd.read_parquet(self.config.signals_path)
@@ -74,9 +74,6 @@ class MyTWAPStrategy(Strategy):
         for bar_type in self.config.bar_types:
             self.subscribe_bars(bar_type)
 
-        for instrument_id in self.config.instrument_ids:
-            self.subscribe_funding_rates(instrument_id)
-
         first_rebalance = self._get_first_rebalance_time()
         self.clock.set_timer(
             name="daily_rebalance",
@@ -98,7 +95,7 @@ class MyTWAPStrategy(Strategy):
         unrealized_pnls = self.portfolio.unrealized_pnls(venue)
         if unrealized_pnls:
             balance += sum(float(pnl.as_double()) for pnl in unrealized_pnls.values())
-        return balance - self.cumulative_funding_cost
+        return balance
 
     def _get_first_rebalance_time(self) -> pd.Timestamp:
         now = self.clock.utc_now()
@@ -108,23 +105,16 @@ class MyTWAPStrategy(Strategy):
         return today_target + pd.Timedelta(days=1)
 
     def on_bar(self, bar: Bar):
+        instrument_id = bar.bar_type.instrument_id
         # Use bar.open (price at bar start) to match 00:00 UTC rebalance time
-        self.last_prices[bar.bar_type.instrument_id] = float(bar.open)
+        self.last_prices[instrument_id] = float(bar.open)
 
-    def on_funding_rate(self, funding_rate: FundingRateUpdate) -> None:
-        instrument_id = funding_rate.instrument_id
-        position = self.portfolio.net_position(instrument_id)
-        if not position or float(position) == 0.0:
-            return
-
-        mark_price = self.config.funding_mark_prices.get(funding_rate.ts_event)
-        if mark_price is None or mark_price <= 0:
-            return
-
-        position_qty = float(position)
-        rate = float(funding_rate.rate)
-        cost = position_qty * mark_price * rate
-        self.cumulative_funding_cost += cost
+        # Feed bar quote volume to the fill model (for volume-scaled slippage)
+        if self.fill_model is not None:
+            vol_map = self.quote_volumes.get(instrument_id)
+            if vol_map is not None:
+                quote_vol = vol_map.get(bar.ts_event, 0.0)
+                self.fill_model.set_recent_volume(str(instrument_id), quote_vol)
 
     def on_rebalance(self, event: TimeEvent):
         current_time = unix_nanos_to_dt(event.ts_event)
@@ -257,7 +247,6 @@ class MyTWAPStrategy(Strategy):
         self.daily_snapshots.append({
             "date": snapshot_date,
             "equity": total_equity,
-            "cumulative_funding_cost": self.cumulative_funding_cost,
             "num_positions": len(positions_data),
             "positions": positions_data,
         })
@@ -268,12 +257,10 @@ class MyTWAPStrategy(Strategy):
         for snapshot in self.daily_snapshots:
             date = snapshot["date"]
             equity = snapshot["equity"]
-            cumulative_funding = snapshot.get("cumulative_funding_cost", 0.0)
             for pos in snapshot["positions"]:
                 rows.append({
                     "date": date,
                     "equity": equity,
-                    "cumulative_funding_cost": cumulative_funding,
                     "symbol": pos["symbol"],
                     "instrument_id": pos["instrument_id"],
                     "side": pos["side"],
@@ -291,19 +278,40 @@ class MyTWAPStrategy(Strategy):
     ):
         side = OrderSide.BUY if delta_qty > 0 else OrderSide.SELL
         quantity = instrument.make_qty(abs(delta_qty))
+        price = self.last_prices.get(instrument_id, 0.0)
+        notional = abs(delta_qty) * price
+        num_intervals = int(self.config.twap_horizon_secs / self.config.twap_interval_secs)
+        notional_per_child = notional / num_intervals if num_intervals > 0 else notional
 
-        order = self.order_factory.market(
-            instrument_id=instrument_id,
-            order_side=side,
-            quantity=quantity,
-            time_in_force=TimeInForce.GTC,
-            exec_algorithm_id=self.twap_exec_algorithm_id,
-            exec_algorithm_params=self.twap_exec_algorithm_params,
-        )
-        self.submit_order(order)
-        self.log.info(
-            f"Submitted TWAP {side.name} {quantity} {instrument_id}", color=LogColor.YELLOW
-        )
+        use_twap = notional_per_child >= self.config.min_order_notional
+
+        if use_twap:
+            order = self.order_factory.market(
+                instrument_id=instrument_id,
+                order_side=side,
+                quantity=quantity,
+                time_in_force=TimeInForce.GTC,
+                exec_algorithm_id=self.twap_exec_algorithm_id,
+                exec_algorithm_params=self.twap_exec_algorithm_params,
+            )
+            self.submit_order(order)
+            self.log.info(
+                f"Submitted TWAP {side.name} {quantity} {instrument_id}",
+                color=LogColor.YELLOW,
+            )
+        else:
+            order = self.order_factory.market(
+                instrument_id=instrument_id,
+                order_side=side,
+                quantity=quantity,
+                time_in_force=TimeInForce.GTC,
+            )
+            self.submit_order(order)
+            self.log.info(
+                f"Submitted DIRECT {side.name} {quantity} {instrument_id} "
+                f"(notional ${notional:.2f} too small for TWAP)",
+                color=LogColor.YELLOW,
+            )
 
     def on_stop(self) -> None:
         for instrument_id in self.instruments:
@@ -320,7 +328,6 @@ class MyTWAPStrategy(Strategy):
         self.signals_df = None
         self.last_prices.clear()
         self.daily_snapshots.clear()
-        self.cumulative_funding_cost = 0.0
 
     def on_dispose(self) -> None:
         self.signals_df = None

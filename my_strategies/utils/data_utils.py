@@ -78,6 +78,34 @@ def load_bars_daily(
     return wrangler.process(df)
 
 
+def load_bars_twap_window(
+    instrument: CryptoPerpetual,
+    bar_type: BarType,
+    data_dir: Path | None = None,
+    hour: int = 0,
+    window_end_hour: int = 2,
+) -> list[Bar]:
+    """Load minute-level bars within a daily window starting at rebalance hour.
+
+    Keeps bars from ``hour`` up to (but not including) ``window_end_hour`` each
+    day.  When ``window_end_hour <= hour`` the window is assumed to wrap past
+    midnight (e.g. hour=23, window_end_hour=1 keeps hours 23 and 0).
+    """
+    if data_dir is None:
+        data_dir = DATA_DIR
+
+    df = _read_binance_parquet(instrument, data_dir)
+
+    if window_end_hour > hour:
+        df = df[(df.index.hour >= hour) & (df.index.hour < window_end_hour)]
+    else:
+        # Wrap around midnight
+        df = df[(df.index.hour >= hour) | (df.index.hour < window_end_hour)]
+
+    wrangler = BarDataWrangler(bar_type, instrument)
+    return wrangler.process(df)
+
+
 FUNDING_HOURS = {0, 8, 16}  # Binance funding settlement times (UTC)
 
 
@@ -132,6 +160,22 @@ def load_funding_rates(
         mark_prices[ts_nanos] = mark_price
 
     return updates, mark_prices
+
+
+def load_quote_volumes(
+    instrument: CryptoPerpetual,
+    data_dir: Path | None = None,
+) -> dict[int, float]:
+    """Load per-minute quote volume keyed by timestamp nanos."""
+    if data_dir is None:
+        data_dir = DATA_DIR
+    symbol = str(instrument.raw_symbol)  # e.g. "BTCUSDT"
+    filepath = data_dir / BINANCE_DATA_SUBDIR / f"{symbol}.parquet"
+    if not filepath.exists():
+        return {}
+    df = pd.read_parquet(filepath, columns=["timestamp", "quote_volume"])
+    df["ts_nanos"] = df["timestamp"].astype("int64")
+    return dict(zip(df["ts_nanos"], df["quote_volume"].astype(float)))
 
 
 def _read_binance_parquet(

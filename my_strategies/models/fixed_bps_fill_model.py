@@ -23,7 +23,7 @@ class FixedBpsSlippageFillModel(FillModel):
     are placed at mid_price * (1 +/- slippage_bps / 10_000).
     """
 
-    def __init__(self, slippage_bps: float = 50.0):
+    def __init__(self, slippage_bps: float = 5.0):
         super().__init__(prob_fill_on_limit=1.0, prob_slippage=0.0)
         self._slippage_bps = slippage_bps
         self._slippage_factor = slippage_bps / 10_000.0

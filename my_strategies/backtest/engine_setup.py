@@ -9,11 +9,12 @@ from pathlib import Path
 
 from my_strategies.analysis import TearsheetConfig
 from my_strategies.analysis import create_tearsheet
-from my_strategies.models.fill_model import FixedBpsSlippageFillModel
+from my_strategies.models.fixed_bps_fill_model import FixedBpsSlippageFillModel
 from my_strategies.utils import BINANCE
 from my_strategies.utils import get_available_symbols
 from my_strategies.utils import load_bars_all
 from my_strategies.utils import load_funding_rates
+from my_strategies.utils import load_quote_volumes
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.config import BacktestEngineConfig
 from nautilus_trader.config import LoggingConfig
@@ -123,6 +124,7 @@ def create_engine(
     log_prefix: str,
     start_capital: float,
     fixed_slippage_bps: float = 5.0,
+    fill_model=None,
 ) -> tuple[BacktestEngine, str]:
     log_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
@@ -138,6 +140,9 @@ def create_engine(
     )
     engine = BacktestEngine(config=engine_config)
 
+    if fill_model is None:
+        fill_model = FixedBpsSlippageFillModel(slippage_bps=fixed_slippage_bps)
+
     engine.add_venue(
         venue=BINANCE,
         oms_type=OmsType.NETTING,
@@ -145,7 +150,7 @@ def create_engine(
         starting_balances=[Money(start_capital, USDT)],
         base_currency=USDT,
         default_leverage=Decimal(1),
-        fill_model=FixedBpsSlippageFillModel(slippage_bps=fixed_slippage_bps),
+        fill_model=fill_model,
         use_message_queue=False,
     )
 
@@ -226,6 +231,20 @@ def load_funding_data(
         print("No funding rate data found")
 
     return all_mark_prices
+
+
+def load_quote_volume_data(
+    instruments: dict,
+    data_dir: Path,
+) -> dict[InstrumentId, dict[int, float]]:
+    """Load per-minute quote volumes for all instruments, keyed by InstrumentId."""
+    result: dict[InstrumentId, dict[int, float]] = {}
+    for symbol, instrument in instruments.items():
+        volumes = load_quote_volumes(instrument, data_dir)
+        if volumes:
+            result[instrument.id] = volumes
+            print(f"  {symbol}: {len(volumes)} quote volume records")
+    return result
 
 
 def print_results(engine: BacktestEngine, log_dir: Path, timestamp: str) -> None:

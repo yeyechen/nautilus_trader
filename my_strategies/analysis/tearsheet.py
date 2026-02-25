@@ -1475,7 +1475,7 @@ def _create_tearsheet_figure(
     # Update global layout
     fig.update_layout(
         title_text=config.title if config.title != "NautilusTrader Backtest Results" else title,
-        title_font_size=20,  # Larger title font
+        title_font_size=14,
         template=theme_config["template"],
         height=config.height,
         showlegend=benchmark_returns is not None,
