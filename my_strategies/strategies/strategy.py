@@ -28,7 +28,7 @@ class MyStrategyConfig(StrategyConfig, frozen=True):
     min_order_notional: float = 10.0  # Minimum order value in USD
     signal_offset_days: int = 1  # Fetch signals from N days ago
     rebalance_hour: int = 0  # 0-23, hour of day (UTC) to rebalance
-    funding_mark_prices: dict[int, float] = {}  # ts_event nanos -> mark price
+    funding_mark_prices: dict[str, dict[int, float]] = {}  # instrument_id -> (ts_event nanos -> mark price)
 
 
 class MyStrategy(Strategy):
@@ -101,8 +101,31 @@ class MyStrategy(Strategy):
         self.last_prices[bar.bar_type.instrument_id] = float(bar.open)
 
     def on_funding_rate(self, funding_rate: FundingRateUpdate) -> None:
-        # skip funding rate cost for now
-        pass
+        instrument_id = funding_rate.instrument_id
+        net_qty = self.portfolio.net_position(instrument_id)
+        if not net_qty or float(net_qty) == 0.0:
+            return
+
+        qty = float(net_qty)
+        rate = float(funding_rate.rate)
+        inst_prices = self.config.funding_mark_prices.get(str(instrument_id), {})
+        mark_price = inst_prices.get(funding_rate.ts_event, 0.0)
+        if mark_price <= 0:
+            mark_price = self.last_prices.get(instrument_id, 0.0)
+        if mark_price <= 0:
+            return
+
+        cost = qty * mark_price * rate
+        self.cumulative_funding_cost += cost
+
+        instrument_symbol = str(instrument_id.symbol)
+        signal_symbol = self.reverse_symbol_mapping.get(instrument_symbol, instrument_symbol)
+        self.log.info(
+            f"Funding {signal_symbol}: qty={qty:.4f}, rate={rate:.6f}, "
+            f"mark={mark_price:.2f}, cost={cost:.4f}, "
+            f"cumulative={self.cumulative_funding_cost:.4f}",
+            color=LogColor.BLUE,
+        )
 
     def on_rebalance(self, event: TimeEvent):
         current_time = unix_nanos_to_dt(event.ts_event)

@@ -12,6 +12,7 @@ from my_strategies.backtest.engine_setup import add_common_args
 from my_strategies.backtest.engine_setup import create_engine
 from my_strategies.backtest.engine_setup import generate_reports
 from my_strategies.backtest.engine_setup import load_bar_data
+from my_strategies.backtest.engine_setup import load_funding_data
 from my_strategies.backtest.engine_setup import load_instruments
 from my_strategies.backtest.engine_setup import parse_start_date
 from my_strategies.backtest.engine_setup import print_results
@@ -29,11 +30,16 @@ def run_backtest(
     start_date=None,
     bar_spec: str = "1-HOUR",
     rebalance_hour: int = 0,
+    simulate_funding: bool = False,
 ) -> None:
     engine, timestamp = create_engine(log_dir, "backtest", start_capital, fixed_slippage_bps)
 
     instruments, bar_types = load_instruments(engine, signals_path, data_dir, bar_spec)
     load_bar_data(engine, instruments, bar_types, data_dir, loader_fn=partial(load_bars_daily, hour=rebalance_hour))
+
+    mark_prices = {}
+    if simulate_funding:
+        mark_prices = load_funding_data(engine, instruments, data_dir)
 
     symbol_mapping = {sym: f"{sym}USDT-PERP" for sym in instruments}
     config = MyStrategyConfig(
@@ -42,6 +48,7 @@ def run_backtest(
         signals_path=str(signals_path),
         symbol_mapping=symbol_mapping,
         rebalance_hour=rebalance_hour,
+        funding_mark_prices=mark_prices,
     )
     strategy = MyStrategy(config=config)
     engine.add_strategy(strategy)
@@ -80,4 +87,5 @@ if __name__ == "__main__":
         start_date=parse_start_date(args.start_date),
         bar_spec=args.bar_spec,
         rebalance_hour=args.rebalance_hour,
+        simulate_funding=args.simulate_funding,
     )

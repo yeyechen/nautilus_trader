@@ -43,7 +43,7 @@ SIGNAL_NAMES = {
     SIGNALS_MAICRO_V2: "Maicro_v2",
 }
 
-SIGNALS_PATH = SIGNALS_MAICRO_V2  # <- choose the signal
+SIGNALS_PATH = SIGNALS_JENNY_V6  # <- choose the signal
 
 HYPERLIQUID_PX_MAX_DECIMALS = 6
 
@@ -212,16 +212,16 @@ def load_funding_data(
     engine: BacktestEngine,
     instruments: dict,
     data_dir: Path,
-) -> dict[int, float]:
-    """Load funding rate data for all instruments. Returns mark prices keyed by ts_event nanos."""
+) -> dict[str, dict[int, float]]:
+    """Load funding rate data for all instruments and return per-instrument mark prices."""
     all_updates = []
-    all_mark_prices: dict[int, float] = {}
+    all_mark_prices: dict[str, dict[int, float]] = {}
 
     for symbol, instrument in instruments.items():
         updates, mark_prices = load_funding_rates(instrument, data_dir)
         if updates:
             all_updates.extend(updates)
-            all_mark_prices.update(mark_prices)
+            all_mark_prices[str(instrument.id)] = mark_prices
             print(f"  {symbol}: {len(updates)} funding rate records")
 
     if all_updates:
@@ -323,6 +323,12 @@ def add_common_args(parser: argparse.ArgumentParser, default_bar_spec: str = "1-
         type=int,
         default=0,
         help="Hour of day (0-23 UTC) to rebalance (default: 0)",
+    )
+    parser.add_argument(
+        "--simulate-funding",
+        action="store_true",
+        default=False,
+        help="Enable funding rate simulation",
     )
 
 
