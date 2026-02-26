@@ -84,6 +84,7 @@ if __name__ == "__main__":
         data_dir=args.data_dir,
         log_dir=args.log_dir,
         start_capital=args.capital,
+        fixed_slippage_bps=args.fixed_slippage_bps,
         start_date=parse_start_date(args.start_date),
         bar_spec=args.bar_spec,
         rebalance_hour=args.rebalance_hour,

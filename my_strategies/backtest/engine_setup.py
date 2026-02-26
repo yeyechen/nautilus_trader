@@ -330,6 +330,12 @@ def add_common_args(parser: argparse.ArgumentParser, default_bar_spec: str = "1-
         default=False,
         help="Enable funding rate simulation",
     )
+    parser.add_argument(
+        "--fixed-slippage-bps",
+        type=float,
+        default=5.0,
+        help="Fixed slippage in basis points (default: 5.0)",
+    )
 
 
 def parse_start_date(date_str: str | None) -> datetime | None:
