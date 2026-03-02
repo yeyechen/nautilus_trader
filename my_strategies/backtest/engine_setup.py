@@ -36,14 +36,16 @@ from nautilus_trader.model.objects import Quantity
 DEFAULT_DATA_DIR = Path(__file__).parent.parent / "data"
 DEFAULT_LOG_DIR = Path(__file__).parent.parent / "logs"
 SIGNALS_JENNY_V6 = DEFAULT_DATA_DIR / "signals" / "signals_2024-12-01_2026-02-21_20260221_125721.parquet"
-SIGNALS_MAICRO_V2 = DEFAULT_DATA_DIR / "signals" / "signals_v2_2024-12-01_2026-02-24_20260224_041123.parquet"
+SIGNALS_MAICRO_V2 = DEFAULT_DATA_DIR / "signals" / "signals_v2_2024-12-01_2026-03-01_20260301_090129.parquet"
+SIGNALS_MAICRO_V2_DOW7 = DEFAULT_DATA_DIR / "signals" / "signals_v2_dow7_2024-12-01_2026-03-01_20260301_083431.parquet"
 
 SIGNAL_NAMES = {
     SIGNALS_JENNY_V6: "Jenny_v6",
     SIGNALS_MAICRO_V2: "Maicro_v2",
+    SIGNALS_MAICRO_V2_DOW7: "Maicro_v2_dow7",
 }
 
-SIGNALS_PATH = SIGNALS_JENNY_V6  # <- choose the signal
+SIGNALS_PATH = SIGNALS_MAICRO_V2_DOW7  # <- choose the signal
 
 HYPERLIQUID_PX_MAX_DECIMALS = 6
 

@@ -36,6 +36,7 @@ def fetch_signals_v2_for_date_range(
         AND NOT isNaN(toFloat64(weight))
         AND toDate(timestamp) >= toDate(%(start_date)s)
         AND toDate(timestamp) <= toDate(%(end_date)s)
+        AND strategy_id = 'v2_ch_rf_combo_dow7'
         GROUP BY toDate(timestamp)
     )
     SELECT
@@ -49,6 +50,7 @@ def fetch_signals_v2_for_date_range(
         AND t.inserted_at = li.max_inserted_at
     WHERE t.weight IS NOT NULL
     AND NOT isNaN(toFloat64(t.weight))
+    AND t.strategy_id = 'v2_ch_rf_combo_dow7'
     ORDER BY timestamp ASC, symbol ASC
     """  # noqa: S608
 
