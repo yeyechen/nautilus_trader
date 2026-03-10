@@ -5,16 +5,14 @@ import time
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
-from pathlib import Path
+
+from decimal import Decimal
 
 from my_strategies.backtest.backtest_api_upload import upload_backtest_results
-from my_strategies.backtest.engine_setup import DEFAULT_LOG_DIR
 from my_strategies.backtest.engine_setup import add_common_args
-from my_strategies.backtest.engine_setup import create_engine
 from my_strategies.backtest.engine_setup import create_instrument
-from my_strategies.backtest.engine_setup import generate_reports
 from my_strategies.backtest.engine_setup import load_hyperliquid_instrument_specs
-from my_strategies.backtest.engine_setup import print_results
+from my_strategies.models.fixed_bps_fill_model import FixedBpsSlippageFillModel
 from my_strategies.strategies.strategy import MyStrategy
 from my_strategies.strategies.strategy import MyStrategyConfig
 from my_strategies.utils import BINANCE
@@ -23,13 +21,20 @@ from my_strategies.utils.clickhouse_data_utils import (
     get_available_symbols_clickhouse,
     load_bars_daily_clickhouse,
 )
+from nautilus_trader.backtest.engine import BacktestEngine
+from nautilus_trader.config import BacktestEngineConfig
+from nautilus_trader.config import LoggingConfig
+from nautilus_trader.model import TraderId
+from nautilus_trader.model.currencies import USDT
 from nautilus_trader.model.data import BarType
+from nautilus_trader.model.enums import AccountType
+from nautilus_trader.model.enums import OmsType
+from nautilus_trader.model.objects import Money
 
 START_DATE = "2024-12-01"
 
 
 def run_backtest(
-    log_dir: Path = DEFAULT_LOG_DIR,
     start_capital: float = 100_000,
     fixed_slippage_bps: float = 5.0,
     start_date=None,
@@ -49,7 +54,22 @@ def run_backtest(
         end_date=ch_end_date,
     )
 
-    engine, timestamp = create_engine(log_dir, "backtest", start_capital, fixed_slippage_bps)
+    engine_config = BacktestEngineConfig(
+        trader_id=TraderId("BACKTEST-001"),
+        logging=LoggingConfig(log_level="ERROR"),
+    )
+    engine = BacktestEngine(config=engine_config)
+    fill_model = FixedBpsSlippageFillModel(slippage_bps=fixed_slippage_bps)
+    engine.add_venue(
+        venue=BINANCE,
+        oms_type=OmsType.NETTING,
+        account_type=AccountType.MARGIN,
+        starting_balances=[Money(start_capital, USDT)],
+        base_currency=USDT,
+        default_leverage=Decimal(1),
+        fill_model=fill_model,
+        use_message_queue=False,
+    )
 
     # --- Resolve symbols from signals + ClickHouse availability ---
     print("Querying ClickHouse for available symbols...")
@@ -110,22 +130,6 @@ def run_backtest(
     print("\nRunning backtest...")
     engine.run(start=start_date)
 
-    print_results(engine, log_dir, timestamp)
-
-    sample_instrument = next(iter(instruments.values()))
-    taker_fee_bps = float(sample_instrument.taker_fee) * 10_000
-    signal_name = f"live_{ch_start_date}_{ch_end_date}"
-    title = (
-        f"{signal_name} | "
-        f"Slippage: {fixed_slippage_bps} bps | "
-        f"Taker Fee: {taker_fee_bps:.1f} bps | "
-        f"Reserve: {config.capital_reserve_pct*100:.0f}% | "
-        f"Min Order: ${config.min_order_notional:.0f} | "
-        f"Signal Offset: {config.signal_offset_days}d | "
-        f"Rebalance: {config.rebalance_hour:02d}:00 UTC"
-    )
-    generate_reports(engine, strategy, log_dir, timestamp, title)
-
     # --- Upload results to teammate's API ---
     upload_backtest_results(engine, strategy)
 
@@ -179,7 +183,6 @@ if __name__ == "__main__":
 
     while True:
         run_backtest(
-            log_dir=args.log_dir,
             start_capital=args.capital,
             fixed_slippage_bps=args.fixed_slippage_bps,
             start_date=None,
