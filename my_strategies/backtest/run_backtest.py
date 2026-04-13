@@ -1,6 +1,7 @@
 """Backtest runner — daily rebalance strategy."""
 
 import argparse
+from decimal import Decimal
 from functools import partial
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from my_strategies.backtest.engine_setup import load_funding_data
 from my_strategies.backtest.engine_setup import load_instruments
 from my_strategies.backtest.engine_setup import parse_start_date
 from my_strategies.backtest.engine_setup import print_results
+from my_strategies.models.fixed_bps_fill_model import FixedBpsSlippageFillModel
 from my_strategies.strategies.strategy import MyStrategy
 from my_strategies.strategies.strategy import MyStrategyConfig
 from my_strategies.utils import load_bars_daily
@@ -31,15 +33,23 @@ def run_backtest(
     bar_spec: str = "1-HOUR",
     rebalance_hour: int = 0,
     simulate_funding: bool = False,
+    taker_fee=Decimal("0.00045"),
 ) -> None:
-    engine, timestamp = create_engine(log_dir, "backtest", start_capital, fixed_slippage_bps)
+    fill_model = FixedBpsSlippageFillModel(slippage_bps=fixed_slippage_bps)
+    engine, timestamp = create_engine(log_dir, "backtest", start_capital, fill_model=fill_model)
 
     instruments, bar_types = load_instruments(engine, signals_path, data_dir, bar_spec)
-    load_bar_data(engine, instruments, bar_types, data_dir, loader_fn=partial(load_bars_daily, hour=rebalance_hour))
+    load_bar_data(
+        engine,
+        instruments,
+        bar_types,
+        data_dir,
+        loader_fn=partial(load_bars_daily, hour=rebalance_hour),
+    )
 
     mark_prices = {}
     if simulate_funding:
-        mark_prices = load_funding_data(engine, instruments, data_dir)
+        mark_prices = load_funding_data(engine, instruments, data_dir, taker_fee=taker_fee)
 
     symbol_mapping = {sym: f"{sym}USDT-PERP" for sym in instruments}
     config = MyStrategyConfig(
@@ -50,11 +60,17 @@ def run_backtest(
         rebalance_hour=rebalance_hour,
         funding_mark_prices=mark_prices,
     )
-    strategy = MyStrategy(config=config)
+    strategy = MyStrategy(config=config, fill_model=fill_model)
     engine.add_strategy(strategy)
 
     print("\nRunning backtest...")
     engine.run(start=start_date)
+
+    turnovers_df = strategy.get_daily_turnovers_df()
+    mean_turnover_notional = (
+        turnovers_df["turnover_notional"].mean() if not turnovers_df.empty else 0.0
+    )
+    mean_turnover_pct = turnovers_df["turnover_pct"].mean() if not turnovers_df.empty else 0.0
 
     print_results(engine, log_dir, timestamp)
 
@@ -65,12 +81,20 @@ def run_backtest(
         f"{signal_name} | "
         f"Slippage: {fixed_slippage_bps} bps | "
         f"Taker Fee: {taker_fee_bps:.1f} bps | "
-        f"Reserve: {config.capital_reserve_pct*100:.0f}% | "
+        f"Reserve: {config.capital_reserve_pct * 100:.0f}% | "
         f"Min Order: ${config.min_order_notional:.0f} | "
         f"Signal Offset: {config.signal_offset_days}d | "
         f"Rebalance: {config.rebalance_hour:02d}:00 UTC"
     )
-    generate_reports(engine, strategy, log_dir, timestamp, title)
+    generate_reports(
+        engine,
+        strategy,
+        log_dir,
+        timestamp,
+        title,
+        mean_daily_turnover=mean_turnover_notional,
+        mean_daily_turnover_pct=mean_turnover_pct,
+    )
 
     engine.dispose()
 
@@ -89,4 +113,5 @@ if __name__ == "__main__":
         bar_spec=args.bar_spec,
         rebalance_hour=args.rebalance_hour,
         simulate_funding=args.simulate_funding,
+        taker_fee=Decimal(str(args.taker_fee)),
     )

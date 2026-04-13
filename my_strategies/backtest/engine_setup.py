@@ -35,9 +35,15 @@ from nautilus_trader.model.objects import Quantity
 
 DEFAULT_DATA_DIR = Path(__file__).parent.parent / "data"
 DEFAULT_LOG_DIR = Path(__file__).parent.parent / "logs"
-SIGNALS_JENNY_V6 = DEFAULT_DATA_DIR / "signals" / "signals_2024-12-01_2026-02-21_20260221_125721.parquet"
-SIGNALS_MAICRO_V2 = DEFAULT_DATA_DIR / "signals" / "signals_v2_2024-12-01_2026-03-01_20260301_090129.parquet"
-SIGNALS_MAICRO_V2_DOW7 = DEFAULT_DATA_DIR / "signals" / "signals_v2_dow7_2024-12-01_2026-03-01_20260301_083431.parquet"
+SIGNALS_JENNY_V6 = (
+    DEFAULT_DATA_DIR / "signals" / "signals_2024-12-01_2026-02-21_20260221_125721.parquet"
+)
+SIGNALS_MAICRO_V2 = (
+    DEFAULT_DATA_DIR / "signals" / "signals_v2_2024-12-01_2026-03-01_20260301_090129.parquet"
+)
+SIGNALS_MAICRO_V2_DOW7 = (
+    DEFAULT_DATA_DIR / "signals" / "signals_v2_dow7_2024-12-01_2026-03-01_20260301_083431.parquet"
+)
 
 SIGNAL_NAMES = {
     SIGNALS_JENNY_V6: "Jenny_v6",
@@ -45,7 +51,7 @@ SIGNAL_NAMES = {
     SIGNALS_MAICRO_V2_DOW7: "Maicro_v2_dow7",
 }
 
-SIGNALS_PATH = SIGNALS_MAICRO_V2_DOW7  # <- choose the signal
+SIGNALS_PATH = SIGNALS_JENNY_V6  # <- choose the signal
 
 HYPERLIQUID_PX_MAX_DECIMALS = 6
 
@@ -61,8 +67,8 @@ def create_instrument(
     if venue is None:
         venue = BINANCE
 
-    price_increment = Price(10 ** -price_precision, price_precision)
-    size_increment = Quantity(10 ** -size_precision, size_precision)
+    price_increment = Price(10**-price_precision, price_precision)
+    size_increment = Quantity(10**-size_precision, size_precision)
 
     base_currency = Currency.from_str(base_symbol)
     return CryptoPerpetual(
@@ -102,7 +108,10 @@ def load_hyperliquid_instrument_specs(
     """
     if meta_path is None:
         meta_path = (
-            Path(__file__).parent.parent / "data" / "hyperliquid_meta_and_ctx" / "full_meta_and_ctx_20260109.json"
+            Path(__file__).parent.parent
+            / "data"
+            / "hyperliquid_meta_and_ctx"
+            / "full_meta_and_ctx_20260109.json"
         )
 
     with open(meta_path) as f:
@@ -125,7 +134,6 @@ def create_engine(
     log_dir: Path,
     log_prefix: str,
     start_capital: float,
-    fixed_slippage_bps: float = 5.0,
     fill_model=None,
 ) -> tuple[BacktestEngine, str]:
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -143,7 +151,7 @@ def create_engine(
     engine = BacktestEngine(config=engine_config)
 
     if fill_model is None:
-        fill_model = FixedBpsSlippageFillModel(slippage_bps=fixed_slippage_bps)
+        fill_model = FixedBpsSlippageFillModel()
 
     engine.add_venue(
         venue=BINANCE,
@@ -179,7 +187,7 @@ def load_instruments(
         instrument = create_instrument(
             base_symbol=symbol,
             venue=BINANCE,
-            price_precision=spec.get("price_precision", 2),
+            price_precision=spec.get("price_precision", 6),
             size_precision=spec.get("size_precision", 8),
         )
         instruments[symbol] = instrument
@@ -211,16 +219,14 @@ def load_bar_data(
 
 
 def load_funding_data(
-    engine: BacktestEngine,
-    instruments: dict,
-    data_dir: Path,
+    engine: BacktestEngine, instruments: dict, data_dir: Path, taker_fee=Decimal("0.00045")
 ) -> dict[str, dict[int, float]]:
     """Load funding rate data for all instruments and return per-instrument mark prices."""
     all_updates = []
     all_mark_prices: dict[str, dict[int, float]] = {}
 
     for symbol, instrument in instruments.items():
-        updates, mark_prices = load_funding_rates(instrument, data_dir)
+        updates, mark_prices = load_funding_rates(instrument, data_dir, taker_fee=taker_fee)
         if updates:
             all_updates.extend(updates)
             all_mark_prices[str(instrument.id)] = mark_prices
@@ -265,6 +271,8 @@ def generate_reports(
     log_dir: Path,
     timestamp: str,
     title: str,
+    mean_daily_turnover: float = 0.0,
+    mean_daily_turnover_pct: float = 0.0,
 ) -> None:
     print("\n" + "=" * 60)
     print("GENERATING DETAILED REPORTS")
@@ -276,6 +284,11 @@ def generate_reports(
     print(f"Daily positions CSV: {daily_snapshots_path}")
     print(f"Total daily snapshots: {len(strategy.daily_snapshots)}")
 
+    turnovers_df = strategy.get_daily_turnovers_df()
+    turnovers_path = log_dir / f"daily_turnovers_{timestamp}.csv"
+    turnovers_df.to_csv(turnovers_path, index=False)
+    print(f"Daily turnovers CSV: {turnovers_path}")
+
     tearsheet_config = TearsheetConfig(theme="plotly_dark")
     tearsheet_path = log_dir / f"tearsheet_{timestamp}.html"
     funding_cost = getattr(strategy, "cumulative_funding_cost", 0.0)
@@ -285,6 +298,8 @@ def generate_reports(
         title=title,
         config=tearsheet_config,
         cumulative_funding_cost=funding_cost,
+        mean_daily_turnover=mean_daily_turnover,
+        mean_daily_turnover_pct=mean_daily_turnover_pct,
     )
     print(f"Tearsheet written to: {tearsheet_path}")
 
@@ -337,6 +352,12 @@ def add_common_args(parser: argparse.ArgumentParser, default_bar_spec: str = "1-
         type=float,
         default=5.0,
         help="Fixed slippage in basis points (default: 5.0)",
+    )
+    parser.add_argument(
+        "--taker-fee",
+        type=float,
+        default=0.00045,
+        help="Taker fee",
     )
 
 
